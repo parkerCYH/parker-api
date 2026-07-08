@@ -68,10 +68,11 @@ API 路徑會照功能嚴格切分,例如 `/api/v1/auth/*`、`/api/v1/cat-care/*
 
 ## 📚 各服務詳細規劃
 
-五個 Side Project 各自的目的跟功能規劃,整理在 `docs` 資料夾裡:
+五個 Side Project 各自的目的跟功能規劃,整理在 `docs` 資料夾裡,另外還有一個管理這 5 個服務的 Admin Dashboard:
 
 - [`docs/auth.md`](docs/auth.md)
 - [`docs/cat-care.md`](docs/cat-care.md)
 - [`docs/fit-track.md`](docs/fit-track.md)
 - [`docs/rent-sniper.md`](docs/rent-sniper.md)
 - [`docs/weather.md`](docs/weather.md)
+- [`docs/admin.md`](docs/admin.md) — 管理其他 5 個 service 的後台 app
