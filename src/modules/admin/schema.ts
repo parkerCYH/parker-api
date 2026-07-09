@@ -18,6 +18,9 @@ export const users = adminSchema.table("users", {
   roleId: uuid("role_id"),
   approvedBy: uuid("approved_by").references((): AnyPgColumn => users.id),
   approvedAt: timestamp("approved_at", { withTimezone: true }),
+  // 三態(ticket #19):role_id 有值 = 已核准;role_id 空 + rejected_at 空 = 待審核;
+  // role_id 空 + rejected_at 有值 = 已拒絕。
+  rejectedAt: timestamp("rejected_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });

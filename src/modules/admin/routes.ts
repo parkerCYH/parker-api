@@ -13,8 +13,11 @@ import {
   canApproveUsers,
   canManageWhitelist,
   canUser,
+  canViewUsers,
+  listUsers,
   listWhitelist,
   refreshSession,
+  rejectUser,
   removeFromWhitelist,
 } from "./service.js";
 
@@ -45,11 +48,14 @@ async function authenticateAdminCaller(c: Context): Promise<AuthResult> {
   }
 }
 
+const userStatusSchema = z.enum(["pending", "approved", "rejected"]);
+
 const userSchema = z.object({
   id: z.string().uuid(),
   email: z.string().email(),
   name: z.string(),
   avatarUrl: z.string().nullable().optional(),
+  status: userStatusSchema,
 });
 
 const pendingResponseSchema = z.object({
@@ -241,6 +247,147 @@ adminRoutes.openapi(approveRoute, async (c) => {
 
   try {
     const user = await approveUser(auth.userId, id, roleName);
+    return c.json(user, 200);
+  } catch (err) {
+    if (err instanceof Error && err.message === "user_not_found") {
+      return c.json({ error: "user_not_found" }, 404);
+    }
+    throw err;
+  }
+});
+
+// User 列表 / 調整 Role / 拒絕申請(ticket #19):列表用新的 admin.users.view(唯讀,Owner/
+// SuperAdmin/Viewer 都有),調整 Role 跟拒絕沿用 admin.users.approve(跟核准是同一種能力)。
+const listUsersRoute = createRoute({
+  method: "get",
+  path: "/users",
+  tags: ["admin"],
+  summary: "List Users, optionally filtered by status (requires admin.users.view)",
+  request: {
+    query: z.object({ status: userStatusSchema.optional() }),
+  },
+  responses: {
+    200: {
+      description: "Users",
+      content: { "application/json": { schema: z.array(userSchema) } },
+    },
+    401: {
+      description: "Missing or invalid caller access token",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    403: {
+      description: "Caller lacks admin.users.view",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+  },
+});
+
+adminRoutes.openapi(listUsersRoute, async (c) => {
+  const auth = await authenticateAdminCaller(c);
+  if (!auth.ok) return c.json({ error: auth.error }, auth.status);
+
+  if (!(await canViewUsers(auth.userId))) {
+    return c.json({ error: "forbidden" }, 403);
+  }
+
+  const { status } = c.req.valid("query");
+  const users = await listUsers(status);
+  return c.json(users, 200);
+});
+
+const updateUserRoleRoute = createRoute({
+  method: "patch",
+  path: "/users/{id}/role",
+  tags: ["admin"],
+  summary: "Adjust an existing User's Role (requires admin.users.approve)",
+  request: {
+    params: z.object({ id: z.string().uuid() }),
+    body: {
+      content: { "application/json": { schema: approveBodySchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: "Role updated",
+      content: { "application/json": { schema: userSchema } },
+    },
+    401: {
+      description: "Missing or invalid caller access token",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    403: {
+      description: "Caller lacks admin.users.approve",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    404: {
+      description: "Target user not found",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+  },
+});
+
+adminRoutes.openapi(updateUserRoleRoute, async (c) => {
+  const auth = await authenticateAdminCaller(c);
+  if (!auth.ok) return c.json({ error: auth.error }, auth.status);
+
+  if (!(await canApproveUsers(auth.userId))) {
+    return c.json({ error: "forbidden" }, 403);
+  }
+
+  const { id } = c.req.valid("param");
+  const { roleName } = c.req.valid("json");
+
+  try {
+    const user = await approveUser(auth.userId, id, roleName);
+    return c.json(user, 200);
+  } catch (err) {
+    if (err instanceof Error && err.message === "user_not_found") {
+      return c.json({ error: "user_not_found" }, 404);
+    }
+    throw err;
+  }
+});
+
+const rejectUserRoute = createRoute({
+  method: "post",
+  path: "/users/{id}/reject",
+  tags: ["admin"],
+  summary: "Reject a pending User application (requires admin.users.approve)",
+  request: {
+    params: z.object({ id: z.string().uuid() }),
+  },
+  responses: {
+    200: {
+      description: "Rejected",
+      content: { "application/json": { schema: userSchema } },
+    },
+    401: {
+      description: "Missing or invalid caller access token",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    403: {
+      description: "Caller lacks admin.users.approve",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    404: {
+      description: "Target user not found",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+  },
+});
+
+adminRoutes.openapi(rejectUserRoute, async (c) => {
+  const auth = await authenticateAdminCaller(c);
+  if (!auth.ok) return c.json({ error: auth.error }, auth.status);
+
+  if (!(await canApproveUsers(auth.userId))) {
+    return c.json({ error: "forbidden" }, 403);
+  }
+
+  const { id } = c.req.valid("param");
+
+  try {
+    const user = await rejectUser(id);
     return c.json(user, 200);
   } catch (err) {
     if (err instanceof Error && err.message === "user_not_found") {

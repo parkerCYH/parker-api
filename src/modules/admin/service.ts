@@ -29,8 +29,16 @@ function toPublicUser(user: {
   email: string;
   name: string;
   avatarUrl: string | null;
+  roleId: string | null;
+  rejectedAt: Date | null;
 }) {
-  return { id: user.id, email: user.email, name: user.name, avatarUrl: user.avatarUrl };
+  return {
+    id: user.id,
+    email: user.email,
+    name: user.name,
+    avatarUrl: user.avatarUrl,
+    status: user.roleId ? ("approved" as const) : user.rejectedAt ? ("rejected" as const) : ("pending" as const),
+  };
 }
 
 async function issueSession(userId: string) {
@@ -145,6 +153,23 @@ export async function approveUser(callerId: string, targetUserId: string, roleNa
 
 export async function canManageWhitelist(userId: string): Promise<boolean> {
   return canUser(userId, "admin.whitelist.manage");
+}
+
+export async function canViewUsers(userId: string): Promise<boolean> {
+  return canUser(userId, "admin.users.view");
+}
+
+export async function listUsers(status?: repo.UserStatus) {
+  const rows = await repo.listUsers(status);
+  return rows.map(toPublicUser);
+}
+
+export async function rejectUser(targetUserId: string) {
+  const user = await repo.rejectUser(targetUserId);
+  if (!user) {
+    throw new Error("user_not_found");
+  }
+  return toPublicUser(user);
 }
 
 export async function addToWhitelist(callerId: string, email: string, roleName: string) {

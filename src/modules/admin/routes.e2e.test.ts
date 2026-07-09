@@ -3,6 +3,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import app from "../../app.js";
 import { createRole } from "../rbac/index.js";
 import { updateUserRole } from "./repository.js";
+import { canUser } from "./service.js";
 
 const OWNER_PROFILE = {
   sub: `google-owner-${randomUUID()}`,
@@ -420,5 +421,141 @@ describe("admin routes", () => {
     expect(loginRes.status).toBe(202);
     const body = (await loginRes.json()) as PendingResponse;
     expect(body.status).toBe("pending");
+  });
+
+  it("lists Users filtered by status (requires admin.users.view)", async () => {
+    const owner = (await (await loginAs(OWNER_PROFILE)).json()) as ApprovedResponse;
+    const authHeader = { authorization: `Bearer ${owner.accessToken}` };
+
+    const pendingProfile = {
+      sub: `google-list-pending-${randomUUID()}`,
+      email: `list-pending-${randomUUID()}@example.com`,
+      name: "List Pending",
+      picture: "https://example.com/avatar.png",
+    };
+    const pendingLogin = (await (await loginAs(pendingProfile)).json()) as PendingResponse;
+
+    const pendingRes = await app.request("/api/v1/admin/users?status=pending", { headers: authHeader });
+    expect(pendingRes.status).toBe(200);
+    const pendingList = (await pendingRes.json()) as Array<{ id: string; status: string }>;
+    expect(pendingList.some((u) => u.id === pendingLogin.userId && u.status === "pending")).toBe(true);
+
+    const approvedRes = await app.request("/api/v1/admin/users?status=approved", { headers: authHeader });
+    const approvedList = (await approvedRes.json()) as Array<{ id: string; status: string }>;
+    expect(approvedList.some((u) => u.id === pendingLogin.userId)).toBe(false);
+    expect(approvedList.every((u) => u.status === "approved")).toBe(true);
+
+    const allRes = await app.request("/api/v1/admin/users", { headers: authHeader });
+    const allList = (await allRes.json()) as Array<{ id: string }>;
+    expect(allList.some((u) => u.id === pendingLogin.userId)).toBe(true);
+    expect(allList.length).toBeGreaterThanOrEqual(approvedList.length + pendingList.length);
+  });
+
+  it("lets a Viewer see the User list but not approve, reject, or adjust Role", async () => {
+    const viewerProfile = {
+      sub: `google-viewer-users-${randomUUID()}`,
+      email: `viewer-users-${randomUUID()}@example.com`,
+      name: "Viewer for user mgmt test",
+      picture: "https://example.com/avatar.png",
+    };
+    const viewer = await loginWithRole(viewerProfile, "Viewer");
+    const authHeader = { authorization: `Bearer ${viewer.accessToken}` };
+
+    const listRes = await app.request("/api/v1/admin/users", { headers: authHeader });
+    expect(listRes.status).toBe(200);
+
+    const someApplicant = {
+      sub: `google-viewer-target-${randomUUID()}`,
+      email: `viewer-target-${randomUUID()}@example.com`,
+      name: "Viewer Target",
+      picture: "https://example.com/avatar.png",
+    };
+    const targetLogin = (await (await loginAs(someApplicant)).json()) as PendingResponse;
+
+    const approveRes = await app.request(`/api/v1/admin/users/${targetLogin.userId}/approve`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...authHeader },
+      body: JSON.stringify({ roleName: "Viewer" }),
+    });
+    expect(approveRes.status).toBe(403);
+
+    const rejectRes = await app.request(`/api/v1/admin/users/${targetLogin.userId}/reject`, {
+      method: "POST",
+      headers: authHeader,
+    });
+    expect(rejectRes.status).toBe(403);
+
+    const patchRes = await app.request(`/api/v1/admin/users/${targetLogin.userId}/role`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json", ...authHeader },
+      body: JSON.stringify({ roleName: "Viewer" }),
+    });
+    expect(patchRes.status).toBe(403);
+  });
+
+  it("lets a SuperAdmin reject an application and it disappears from the pending list", async () => {
+    const superAdminProfile = {
+      sub: `google-superadmin-reject-${randomUUID()}`,
+      email: `superadmin-reject-${randomUUID()}@example.com`,
+      name: "SuperAdmin for reject test",
+      picture: "https://example.com/avatar.png",
+    };
+    const superAdmin = await loginWithRole(superAdminProfile, "SuperAdmin");
+    const authHeader = { authorization: `Bearer ${superAdmin.accessToken}` };
+
+    const rejectedApplicant = {
+      sub: `google-to-reject-${randomUUID()}`,
+      email: `to-reject-${randomUUID()}@example.com`,
+      name: "To Be Rejected",
+      picture: "https://example.com/avatar.png",
+    };
+    const applicantLogin = (await (await loginAs(rejectedApplicant)).json()) as PendingResponse;
+
+    const rejectRes = await app.request(`/api/v1/admin/users/${applicantLogin.userId}/reject`, {
+      method: "POST",
+      headers: authHeader,
+    });
+    expect(rejectRes.status).toBe(200);
+    const rejectedBody = (await rejectRes.json()) as { status: string };
+    expect(rejectedBody.status).toBe("rejected");
+
+    const pendingRes = await app.request("/api/v1/admin/users?status=pending", { headers: authHeader });
+    const pendingList = (await pendingRes.json()) as Array<{ id: string }>;
+    expect(pendingList.some((u) => u.id === applicantLogin.userId)).toBe(false);
+
+    const rejectedRes = await app.request("/api/v1/admin/users?status=rejected", { headers: authHeader });
+    const rejectedList = (await rejectedRes.json()) as Array<{ id: string }>;
+    expect(rejectedList.some((u) => u.id === applicantLogin.userId)).toBe(true);
+  });
+
+  it("lets a SuperAdmin adjust an already-approved User's Role via PATCH", async () => {
+    const superAdminProfile = {
+      sub: `google-superadmin-patch-${randomUUID()}`,
+      email: `superadmin-patch-${randomUUID()}@example.com`,
+      name: "SuperAdmin for patch test",
+      picture: "https://example.com/avatar.png",
+    };
+    const superAdmin = await loginWithRole(superAdminProfile, "SuperAdmin");
+    const authHeader = { authorization: `Bearer ${superAdmin.accessToken}` };
+
+    const viewerProfile = {
+      sub: `google-promote-${randomUUID()}`,
+      email: `promote-${randomUUID()}@example.com`,
+      name: "Promote Me",
+      picture: "https://example.com/avatar.png",
+    };
+    const viewer = await loginWithRole(viewerProfile, "Viewer");
+
+    const patchRes = await app.request(`/api/v1/admin/users/${viewer.user.id}/role`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json", ...authHeader },
+      body: JSON.stringify({ roleName: "SuperAdmin" }),
+    });
+    expect(patchRes.status).toBe(200);
+    const patchedBody = (await patchRes.json()) as { status: string };
+    expect(patchedBody.status).toBe("approved");
+
+    // Viewer 沒有 admin.users.approve,升級成 SuperAdmin 之後應該有了
+    expect(await canUser(viewer.user.id, "admin.users.approve")).toBe(true);
   });
 });

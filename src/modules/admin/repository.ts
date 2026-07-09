@@ -1,6 +1,8 @@
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, isNotNull, isNull } from "drizzle-orm";
 import { db } from "../../shared/db.js";
 import { inviteWhitelist, refreshTokens, users } from "./schema.js";
+
+export type UserStatus = "pending" | "approved" | "rejected";
 
 export async function findUserByGoogleSub(googleSub: string) {
   const [user] = await db.select().from(users).where(eq(users.googleSub, googleSub)).limit(1);
@@ -35,6 +37,28 @@ export async function updateUserRole(
     .where(eq(users.id, userId))
     .returning();
   return user;
+}
+
+export async function rejectUser(userId: string) {
+  const [user] = await db
+    .update(users)
+    .set({ rejectedAt: new Date(), updatedAt: new Date() })
+    .where(eq(users.id, userId))
+    .returning();
+  return user;
+}
+
+export async function listUsers(status?: UserStatus) {
+  if (status === "pending") {
+    return db.select().from(users).where(and(isNull(users.roleId), isNull(users.rejectedAt)));
+  }
+  if (status === "rejected") {
+    return db.select().from(users).where(and(isNull(users.roleId), isNotNull(users.rejectedAt)));
+  }
+  if (status === "approved") {
+    return db.select().from(users).where(isNotNull(users.roleId));
+  }
+  return db.select().from(users);
 }
 
 export async function findWhitelistEntryByEmail(email: string) {
