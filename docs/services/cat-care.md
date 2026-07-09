@@ -48,3 +48,7 @@ cat_care.weight_records
   notes         text null
   created_at    timestamptz not null default now()
 ```
+
+## 給 Admin Dashboard 用的介面
+
+cat-care 不開任何對外端點給 Admin Dashboard 直接打,也不需要知道 User/RBAC 的存在。`admin` module 會用 in-process function call 呼叫 `cat-care` 從 `index.ts` 額外匯出的資料存取函式(例如 `listAllCats()`),取得跨 Player 的全部資料。權限檢查(`canUser`)完全由 `admin` module 負責,詳見 [`docs/adr/0005-per-service-admin-endpoints.md`](../adr/0005-per-service-admin-endpoints.md)。

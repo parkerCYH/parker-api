@@ -10,6 +10,11 @@
 - 第一個 User 由 `SUPER_ADMIN_EMAILS` 環境變數指定,略過審核直接生效,解決系統剛啟動時「沒有既有 User 可以核准」的問題
 - User RBAC 跟 Player RBAC 是兩套獨立規則表,共用 `namespace.resource.action` 命名慣例(例如 `admin.fitTrack.viewPlayers`),但各自存放在不同的規則表,語意上不混用
 - User RBAC 有 Role 分層:規則(`admin.*`)綁在 Role 上,核准或調整 User 時只需指派 Role,不用逐條勾規則
+- `admin` module 對外曝露 `canUser(userId, rule)`,跟 `auth` module 曝露的 `canPlayer(playerId, rule)` 是完全平行的介面,自己內部使用(不曝露給其他 service)
+
+## Admin Dashboard 只打 admin 的 API(Gateway 模式)
+
+Admin Dashboard 前端**只呼叫 `admin` module 的 API**(例如 `GET /api/v1/admin/cat-care/cats`),不會直接打 `cat-care` 等其他 service 的端點。`admin` 的 route 先用 `canUser` 做權限檢查,通過後用 in-process function call 呼叫其他 service module 額外從 `index.ts` 匯出的資料存取函式(例如 `cat-care` 匯出 `listAllCats()`)取得/操作資料再回傳。其他 service 不需要自己開對外端點給 Admin Dashboard,也不需要知道 User/RBAC 的存在——這件事完全在 `admin` 這一層做掉。詳見 [`docs/adr/0005-per-service-admin-endpoints.md`](../adr/0005-per-service-admin-endpoints.md)。
 
 ## Role 目錄
 
