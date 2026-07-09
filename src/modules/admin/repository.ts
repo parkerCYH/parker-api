@@ -1,6 +1,6 @@
 import { and, eq, isNull } from "drizzle-orm";
 import { db } from "../../shared/db.js";
-import { refreshTokens, roleRules, roles, users } from "./schema.js";
+import { refreshTokens, users } from "./schema.js";
 
 export async function findUserByGoogleSub(googleSub: string) {
   const [user] = await db.select().from(users).where(eq(users.googleSub, googleSub)).limit(1);
@@ -34,32 +34,6 @@ export async function updateUserRole(
     .where(eq(users.id, userId))
     .returning();
   return user;
-}
-
-export async function findRoleByName(name: string) {
-  const [role] = await db.select().from(roles).where(eq(roles.name, name)).limit(1);
-  return role;
-}
-
-// 判斷一個 User 有沒有某條 admin.* 規則:SuperAdmin 用角色名稱直接放行(見 docs/services/admin.md
-// 「SuperAdmin:擁有所有 admin.* 規則」),其他角色逐條查 role_rules。
-export async function findUserRoleName(userId: string): Promise<string | undefined> {
-  const [row] = await db
-    .select({ roleName: roles.name })
-    .from(users)
-    .innerJoin(roles, eq(users.roleId, roles.id))
-    .where(eq(users.id, userId))
-    .limit(1);
-  return row?.roleName;
-}
-
-export async function roleHasRule(roleId: string, rule: string): Promise<boolean> {
-  const [row] = await db
-    .select({ id: roleRules.id })
-    .from(roleRules)
-    .where(and(eq(roleRules.roleId, roleId), eq(roleRules.rule, rule)))
-    .limit(1);
-  return Boolean(row);
 }
 
 export async function insertRefreshToken(input: { userId: string; tokenHash: string; expiresAt: Date }) {

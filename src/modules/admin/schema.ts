@@ -1,34 +1,12 @@
 import { randomUUID } from "node:crypto";
-import { type AnyPgColumn, pgSchema, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
+import { type AnyPgColumn, pgSchema, text, timestamp, uuid } from "drizzle-orm/pg-core";
 
 export const adminSchema = pgSchema("admin");
 
-// Role 目錄:SuperAdmin(所有 admin.* 規則,以角色名稱判斷,見 service.ts 的 hasAdminRule)/
-// Viewer(逐條 admin.* 規則,存在 role_rules)。見 docs/services/admin.md「Role 目錄」。
-export const roles = adminSchema.table("roles", {
-  id: uuid("id")
-    .primaryKey()
-    .$defaultFn(() => randomUUID()),
-  name: text("name").notNull().unique(),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-});
-
-export const roleRules = adminSchema.table(
-  "role_rules",
-  {
-    id: uuid("id")
-      .primaryKey()
-      .$defaultFn(() => randomUUID()),
-    roleId: uuid("role_id")
-      .notNull()
-      .references(() => roles.id, { onDelete: "cascade" }),
-    rule: text("rule").notNull(),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  },
-  (table) => [unique().on(table.roleId, table.rule)],
-);
-
-// role_id null = 申請待審核中(ADR-0001);審核核准 = 指派一個 role_id。
+// role_id null = 申請待審核中(ADR-0001);審核核准 = 指派一個 role_id。role_id 指回
+// rbac.roles.id(ADR-0007)——跟 cat-care 指回 auth.players 的道理一樣,drizzle-kit 的 loader
+// 不解析跨 module 的相對路徑匯入,所以不用 Drizzle 的 .references() 匯入 rbac/schema.ts,
+// 實際的跨 schema FK constraint 手動加在 migration SQL 裡。
 export const users = adminSchema.table("users", {
   id: uuid("id")
     .primaryKey()
@@ -37,7 +15,7 @@ export const users = adminSchema.table("users", {
   email: text("email").notNull().unique(),
   name: text("name").notNull(),
   avatarUrl: text("avatar_url"),
-  roleId: uuid("role_id").references(() => roles.id),
+  roleId: uuid("role_id"),
   approvedBy: uuid("approved_by").references((): AnyPgColumn => users.id),
   approvedAt: timestamp("approved_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

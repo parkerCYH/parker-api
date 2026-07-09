@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { buildGoogleAuthUrl, exchangeGoogleCode } from "../auth/index.js";
 import { listAllCats } from "../cat-care/index.js";
+import { addRuleToRole, createRole, deleteRole, listRoles, removeRuleFromRole } from "../rbac/index.js";
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import type { Context } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
@@ -68,7 +69,13 @@ const refreshResponseSchema = z.object({
 });
 
 const approveBodySchema = z.object({
-  roleName: z.enum(["SuperAdmin", "Viewer"]),
+  roleName: z.enum(["Owner", "SuperAdmin", "Viewer"]),
+});
+
+const roleSchema = z.object({
+  id: z.string().uuid(),
+  name: z.string(),
+  createdAt: z.string(),
 });
 
 export const adminRoutes = new OpenAPIHono();
@@ -271,4 +278,173 @@ adminRoutes.openapi(catCareCatsRoute, async (c) => {
 
   const cats = await listAllCats();
   return c.json(cats, 200);
+});
+
+// Role/Rule 管理(ADR-0007):所有這些 route 都要求 rbac.roles.manage,通過後直接呼叫
+// rbac 匯出的管理函式——admin 只做權限檢查這一層,Role/Rule 本身的存取邏輯完全在 rbac。
+// 回傳結果而非 Response(同 authenticateAdminCaller 的理由),讓每個 handler 自己用當下
+// 正確型別的 c.json() 產生回應,避免 zod-openapi 的 typed response 型別檢查衝突。
+type RoleManagerGuard = { ok: true } | { ok: false; status: 401 | 403; error: string };
+
+async function requireRoleManager(c: Context): Promise<RoleManagerGuard> {
+  const auth = await authenticateAdminCaller(c);
+  if (!auth.ok) {
+    return { ok: false, status: auth.status, error: auth.error };
+  }
+
+  if (!(await canUser(auth.userId, "rbac.roles.manage"))) {
+    return { ok: false, status: 403, error: "forbidden" };
+  }
+
+  return { ok: true };
+}
+
+const listRolesRoute = createRoute({
+  method: "get",
+  path: "/roles",
+  tags: ["admin"],
+  summary: "List all Roles (requires rbac.roles.manage)",
+  responses: {
+    200: { description: "Roles", content: { "application/json": { schema: z.array(roleSchema) } } },
+    401: {
+      description: "Missing or invalid caller access token",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    403: {
+      description: "Caller lacks rbac.roles.manage",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+  },
+});
+
+adminRoutes.openapi(listRolesRoute, async (c) => {
+  const guard = await requireRoleManager(c);
+  if (!guard.ok) return c.json({ error: guard.error }, guard.status);
+
+  const roles = await listRoles();
+  return c.json(roles, 200);
+});
+
+const createRoleRoute = createRoute({
+  method: "post",
+  path: "/roles",
+  tags: ["admin"],
+  summary: "Create a Role (requires rbac.roles.manage)",
+  request: {
+    body: {
+      content: { "application/json": { schema: z.object({ name: z.string().min(1) }) } },
+    },
+  },
+  responses: {
+    201: { description: "Role created", content: { "application/json": { schema: roleSchema } } },
+    401: {
+      description: "Missing or invalid caller access token",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    403: {
+      description: "Caller lacks rbac.roles.manage",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+  },
+});
+
+adminRoutes.openapi(createRoleRoute, async (c) => {
+  const guard = await requireRoleManager(c);
+  if (!guard.ok) return c.json({ error: guard.error }, guard.status);
+
+  const { name } = c.req.valid("json");
+  const role = await createRole(name);
+  return c.json(role, 201);
+});
+
+const deleteRoleRoute = createRoute({
+  method: "delete",
+  path: "/roles/{roleId}",
+  tags: ["admin"],
+  summary: "Delete a Role (requires rbac.roles.manage)",
+  request: { params: z.object({ roleId: z.string().uuid() }) },
+  responses: {
+    204: { description: "Role deleted" },
+    401: {
+      description: "Missing or invalid caller access token",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    403: {
+      description: "Caller lacks rbac.roles.manage",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+  },
+});
+
+adminRoutes.openapi(deleteRoleRoute, async (c) => {
+  const guard = await requireRoleManager(c);
+  if (!guard.ok) return c.json({ error: guard.error }, guard.status);
+
+  const { roleId } = c.req.valid("param");
+  await deleteRole(roleId);
+  return c.body(null, 204);
+});
+
+const addRuleRoute = createRoute({
+  method: "post",
+  path: "/roles/{roleId}/rules",
+  tags: ["admin"],
+  summary: "Add a rule to a Role (requires rbac.roles.manage)",
+  request: {
+    params: z.object({ roleId: z.string().uuid() }),
+    body: {
+      content: { "application/json": { schema: z.object({ rule: z.string().min(1) }) } },
+    },
+  },
+  responses: {
+    204: { description: "Rule added" },
+    401: {
+      description: "Missing or invalid caller access token",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    403: {
+      description: "Caller lacks rbac.roles.manage",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+  },
+});
+
+adminRoutes.openapi(addRuleRoute, async (c) => {
+  const guard = await requireRoleManager(c);
+  if (!guard.ok) return c.json({ error: guard.error }, guard.status);
+
+  const { roleId } = c.req.valid("param");
+  const { rule } = c.req.valid("json");
+  await addRuleToRole(roleId, rule);
+  return c.body(null, 204);
+});
+
+const removeRuleRoute = createRoute({
+  method: "delete",
+  path: "/roles/{roleId}/rules/{rule}",
+  tags: ["admin"],
+  summary: "Remove a rule from a Role (requires rbac.roles.manage)",
+  request: {
+    params: z.object({ roleId: z.string().uuid(), rule: z.string() }),
+  },
+  responses: {
+    204: { description: "Rule removed" },
+    401: {
+      description: "Missing or invalid caller access token",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    403: {
+      description: "Caller lacks rbac.roles.manage",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+  },
+});
+
+adminRoutes.openapi(removeRuleRoute, async (c) => {
+  const guard = await requireRoleManager(c);
+  if (!guard.ok) return c.json({ error: guard.error }, guard.status);
+
+  const { roleId, rule } = c.req.valid("param");
+  await removeRuleFromRole(roleId, rule);
+  return c.body(null, 204);
 });

@@ -1,14 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import app from "../../app.js";
-import * as repo from "./repository.js";
-import { db } from "../../shared/db.js";
-import { roles } from "./schema.js";
+import { createRole } from "../rbac/index.js";
+import { updateUserRole } from "./repository.js";
 
-const SUPER_ADMIN_PROFILE = {
-  sub: `google-superadmin-${randomUUID()}`,
-  email: `superadmin-${randomUUID()}@example.com`,
-  name: "Bootstrap SuperAdmin",
+const OWNER_PROFILE = {
+  sub: `google-owner-${randomUUID()}`,
+  email: `owner-${randomUUID()}@example.com`,
+  name: "Bootstrap Owner",
   picture: "https://example.com/avatar.png",
 };
 
@@ -19,7 +18,7 @@ const APPLICANT_PROFILE = {
   picture: "https://example.com/avatar.png",
 };
 
-let currentProfile = SUPER_ADMIN_PROFILE;
+let currentProfile = OWNER_PROFILE;
 
 function stubGoogleFetch() {
   vi.stubGlobal(
@@ -56,7 +55,7 @@ interface ApprovedResponse {
   user: { id: string; email: string; name: string; avatarUrl?: string };
 }
 
-async function loginAs(profile: typeof SUPER_ADMIN_PROFILE) {
+async function loginAs(profile: typeof OWNER_PROFILE) {
   currentProfile = profile;
   stubGoogleFetch();
 
@@ -71,23 +70,40 @@ async function loginAs(profile: typeof SUPER_ADMIN_PROFILE) {
   return res;
 }
 
+// 申請 → 用 Owner 核准指定的 roleName → 用同一個 profile 再登入一次拿 token
+async function loginWithRole(profile: typeof OWNER_PROFILE, roleName: "Owner" | "SuperAdmin" | "Viewer") {
+  const applicantLogin = (await (await loginAs(profile)).json()) as PendingResponse;
+  const ownerLogin = (await (await loginAs(OWNER_PROFILE)).json()) as ApprovedResponse;
+
+  await app.request(`/api/v1/admin/users/${applicantLogin.userId}/approve`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${ownerLogin.accessToken}`,
+    },
+    body: JSON.stringify({ roleName }),
+  });
+
+  return (await (await loginAs(profile)).json()) as ApprovedResponse;
+}
+
 describe("admin routes", () => {
   beforeAll(() => {
-    process.env.SUPER_ADMIN_EMAILS = SUPER_ADMIN_PROFILE.email;
+    process.env.SUPER_ADMIN_EMAILS = OWNER_PROFILE.email;
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
   });
 
-  it("bootstraps the first User via SUPER_ADMIN_EMAILS with SuperAdmin role", async () => {
-    const res = await loginAs(SUPER_ADMIN_PROFILE);
+  it("bootstraps the first User via SUPER_ADMIN_EMAILS with Owner role (ADR-0007)", async () => {
+    const res = await loginAs(OWNER_PROFILE);
 
     expect(res.status).toBe(200);
     const body = (await res.json()) as ApprovedResponse;
     expect(body.status).toBe("approved");
     expect(body.accessToken).toEqual(expect.any(String));
-    expect(body.user.email).toBe(SUPER_ADMIN_PROFILE.email);
+    expect(body.user.email).toBe(OWNER_PROFILE.email);
   });
 
   it("creates a pending application for a non-allowlisted email", async () => {
@@ -112,15 +128,15 @@ describe("admin routes", () => {
     expect(res.status).toBe(401);
   });
 
-  it("lets a SuperAdmin approve a pending applicant and assign a Role", async () => {
-    const superAdminLogin = (await (await loginAs(SUPER_ADMIN_PROFILE)).json()) as ApprovedResponse;
+  it("lets an Owner approve a pending applicant and assign a Role", async () => {
+    const ownerLogin = (await (await loginAs(OWNER_PROFILE)).json()) as ApprovedResponse;
     const applicantLogin = (await (await loginAs(APPLICANT_PROFILE)).json()) as PendingResponse;
 
     const res = await app.request(`/api/v1/admin/users/${applicantLogin.userId}/approve`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        authorization: `Bearer ${superAdminLogin.accessToken}`,
+        authorization: `Bearer ${ownerLogin.accessToken}`,
       },
       body: JSON.stringify({ roleName: "Viewer" }),
     });
@@ -131,6 +147,35 @@ describe("admin routes", () => {
 
     const secondLogin = (await loginAs(APPLICANT_PROFILE)).status === 200;
     expect(secondLogin).toBe(true);
+  });
+
+  it("lets a SuperAdmin approve applications too (admin.users.approve is a real seeded rule)", async () => {
+    const superAdminProfile = {
+      sub: `google-superadmin-${randomUUID()}`,
+      email: `superadmin-${randomUUID()}@example.com`,
+      name: "SuperAdmin User",
+      picture: "https://example.com/avatar.png",
+    };
+    const superAdmin = await loginWithRole(superAdminProfile, "SuperAdmin");
+
+    const freshApplicant = {
+      sub: `google-fresh-applicant-${randomUUID()}`,
+      email: `fresh-applicant-${randomUUID()}@example.com`,
+      name: "Fresh Applicant",
+      picture: "https://example.com/avatar.png",
+    };
+    const applicantLogin = (await (await loginAs(freshApplicant)).json()) as PendingResponse;
+
+    const res = await app.request(`/api/v1/admin/users/${applicantLogin.userId}/approve`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${superAdmin.accessToken}`,
+      },
+      body: JSON.stringify({ roleName: "Viewer" }),
+    });
+
+    expect(res.status).toBe(200);
   });
 
   it("forbids a Viewer from approving other applications", async () => {
@@ -157,7 +202,7 @@ describe("admin routes", () => {
   });
 
   it("issues a new access token via refresh", async () => {
-    const login = (await (await loginAs(SUPER_ADMIN_PROFILE)).json()) as ApprovedResponse;
+    const login = (await (await loginAs(OWNER_PROFILE)).json()) as ApprovedResponse;
 
     const res = await app.request("/api/v1/admin/refresh", {
       method: "POST",
@@ -170,8 +215,8 @@ describe("admin routes", () => {
     expect(body.accessToken).toEqual(expect.any(String));
   });
 
-  it("lets a SuperAdmin call the cat-care gateway route", async () => {
-    const login = (await (await loginAs(SUPER_ADMIN_PROFILE)).json()) as ApprovedResponse;
+  it("lets an Owner call the cat-care gateway route", async () => {
+    const login = (await (await loginAs(OWNER_PROFILE)).json()) as ApprovedResponse;
 
     const res = await app.request("/api/v1/admin/cat-care/cats", {
       headers: { authorization: `Bearer ${login.accessToken}` },
@@ -182,40 +227,27 @@ describe("admin routes", () => {
   });
 
   it("lets a Viewer call the cat-care gateway route (admin.catCare.viewAll seeded on Viewer)", async () => {
-    const viewerApplicant = {
+    const viewerProfile = {
       sub: `google-viewer-${randomUUID()}`,
       email: `viewer-${randomUUID()}@example.com`,
       name: "Viewer User",
       picture: "https://example.com/avatar.png",
     };
-    const applicantLogin = (await (await loginAs(viewerApplicant)).json()) as PendingResponse;
-    const superAdminLogin = (await (await loginAs(SUPER_ADMIN_PROFILE)).json()) as ApprovedResponse;
-
-    await app.request(`/api/v1/admin/users/${applicantLogin.userId}/approve`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${superAdminLogin.accessToken}`,
-      },
-      body: JSON.stringify({ roleName: "Viewer" }),
-    });
-
-    const viewerLogin = (await (await loginAs(viewerApplicant)).json()) as ApprovedResponse;
+    const viewer = await loginWithRole(viewerProfile, "Viewer");
 
     const res = await app.request("/api/v1/admin/cat-care/cats", {
-      headers: { authorization: `Bearer ${viewerLogin.accessToken}` },
+      headers: { authorization: `Bearer ${viewer.accessToken}` },
     });
 
     expect(res.status).toBe(200);
   });
 
   it("forbids an approved User whose Role lacks admin.catCare.viewAll", async () => {
-    // Viewer 現在的規則裡有 admin.catCare.viewAll,production 的兩個角色都能看,所以這裡建一個
-    // 只在測試裡存在、沒有任何規則的臨時角色,證明 canUser 真的逐條查 role_rules、不是永遠放行。
-    const [noRulesRole] = await db
-      .insert(roles)
-      .values({ name: `NoRules-${randomUUID()}` })
-      .returning();
+    // Viewer 現在的規則裡有 admin.catCare.viewAll,production 的三個角色(Owner/SuperAdmin/Viewer)
+    // 都能看,所以這裡透過 rbac 建一個只在測試裡存在、沒有任何規則的臨時角色,證明 canUser
+    // 真的逐條查 rbac.role_rules、不是永遠放行。approve API 的 roleName enum 只接受
+    // Owner/SuperAdmin/Viewer,這裡直接呼叫 rbac 的 createRole 繞過,再用 repository 指派。
+    const noRulesRole = await createRole(`NoRules-${randomUUID()}`);
 
     const noRulesApplicant = {
       sub: `google-norules-${randomUUID()}`,
@@ -224,11 +256,11 @@ describe("admin routes", () => {
       picture: "https://example.com/avatar.png",
     };
     const applicantLogin = (await (await loginAs(noRulesApplicant)).json()) as PendingResponse;
-    const superAdminLogin = (await (await loginAs(SUPER_ADMIN_PROFILE)).json()) as ApprovedResponse;
+    const ownerLogin = (await (await loginAs(OWNER_PROFILE)).json()) as ApprovedResponse;
 
-    await repo.updateUserRole(applicantLogin.userId, {
+    await updateUserRole(applicantLogin.userId, {
       roleId: noRulesRole.id,
-      approvedBy: superAdminLogin.user.id,
+      approvedBy: ownerLogin.user.id,
       approvedAt: new Date(),
     });
 
@@ -244,5 +276,64 @@ describe("admin routes", () => {
   it("rejects the gateway route without a caller access token", async () => {
     const res = await app.request("/api/v1/admin/cat-care/cats");
     expect(res.status).toBe(401);
+  });
+
+  it("SuperAdmin no longer bypasses rules it wasn't explicitly given (ADR-0007)", async () => {
+    const superAdminProfile = {
+      sub: `google-superadmin2-${randomUUID()}`,
+      email: `superadmin2-${randomUUID()}@example.com`,
+      name: "SuperAdmin User 2",
+      picture: "https://example.com/avatar.png",
+    };
+    const superAdmin = await loginWithRole(superAdminProfile, "SuperAdmin");
+
+    // SuperAdmin 沒有 rbac.roles.manage(那是 Owner 專屬),舊的角色名稱特判會讓這裡誤放行
+    const res = await app.request("/api/v1/admin/roles", {
+      headers: { authorization: `Bearer ${superAdmin.accessToken}` },
+    });
+
+    expect(res.status).toBe(403);
+  });
+
+  it("lets an Owner manage Roles and their rules end to end", async () => {
+    const owner = (await (await loginAs(OWNER_PROFILE)).json()) as ApprovedResponse;
+    const authHeader = { authorization: `Bearer ${owner.accessToken}` };
+
+    const createRes = await app.request("/api/v1/admin/roles", {
+      method: "POST",
+      headers: { "content-type": "application/json", ...authHeader },
+      body: JSON.stringify({ name: `Owner-Managed-${randomUUID()}` }),
+    });
+    expect(createRes.status).toBe(201);
+    const role = (await createRes.json()) as { id: string; name: string };
+
+    const listRes = await app.request("/api/v1/admin/roles", { headers: authHeader });
+    expect(listRes.status).toBe(200);
+    const rolesList = (await listRes.json()) as Array<{ id: string }>;
+    expect(rolesList.some((r) => r.id === role.id)).toBe(true);
+
+    const addRuleRes = await app.request(`/api/v1/admin/roles/${role.id}/rules`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...authHeader },
+      body: JSON.stringify({ rule: "some.test.rule" }),
+    });
+    expect(addRuleRes.status).toBe(204);
+
+    const removeRuleRes = await app.request(`/api/v1/admin/roles/${role.id}/rules/some.test.rule`, {
+      method: "DELETE",
+      headers: authHeader,
+    });
+    expect(removeRuleRes.status).toBe(204);
+
+    const deleteRes = await app.request(`/api/v1/admin/roles/${role.id}`, {
+      method: "DELETE",
+      headers: authHeader,
+    });
+    expect(deleteRes.status).toBe(204);
+
+    const listAfterDelete = (await (
+      await app.request("/api/v1/admin/roles", { headers: authHeader })
+    ).json()) as Array<{ id: string }>;
+    expect(listAfterDelete.some((r) => r.id === role.id)).toBe(false);
   });
 });
