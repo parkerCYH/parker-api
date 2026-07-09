@@ -33,12 +33,12 @@ auth.refresh_tokens
 
 每個 side project(cat-care、rent-sniper、weather、bill-split)有自己的前端、自己的登入畫面,但實際的 Google OAuth 交換、Player 身分、JWT/refresh token 機制完全共用同一套 `auth`,不會像 `fit-track` 一樣獨立出去。
 
-登入時,前端在導去 Google 的請求上帶一個 `app` 參數(例如 `GET /api/v1/auth/google?app=catCare`),透過 OAuth 的 `state` 帶過 callback。`auth` 的 callback 收到後:
+前端**不需要傳任何額外參數**。`auth` 讀取請求的 `Referer` header 取得發起登入的網域,查伺服器端維護的「網域 → app」對照表,`auth` 的 callback 收到後:
 
 1. 用 `canPlayer(playerId, '<app>.access')` 檢查這個 Player 有沒有權限用這個 app,沒有就擋下來,不發 token
-2. 通過後,依 `app` 名稱查伺服器端維護的「app → 導回網址」對照表,把登入結果導回對應的 app
+2. 通過後,依對照表把登入結果導回對應的網址
 
-**導回網址不接受前端指定**,只能是 `auth` 自己設定檔/環境變數裡登記過的網址,前端只能傳 app 名稱——避免前端能任意指定 redirect 網址造成 open redirect 風險。詳見 `docs/adr/0006-app-scoped-login-redirect.md`。
+若 `Referer` 缺失(瀏覽器隱私設定、或前端設了 `Referrer-Policy: no-referrer`)導致查不到對應的 app,直接回 400 拒絕,不做預設 app 的 fallback。**導回網址不接受前端指定**,只能是對照表裡登記過的網址,避免 open redirect。詳見 `docs/adr/0006-app-scoped-login-redirect.md`。
 
 ## 可能功能
 

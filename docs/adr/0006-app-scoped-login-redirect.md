@@ -1,5 +1,12 @@
-# Player 登入帶 app 參數,導回網址採伺服器端白名單
+# Player 登入用 domain 對照表判斷 app,不用前端傳參數
 
-各 side project 有自己的登入介面,但共用同一個 `auth` 的 Google OAuth、Player 身分與 JWT/refresh token 機制。登入請求帶一個 `app` 名稱(例如 `catCare`),透過 OAuth `state` 帶過 callback,`auth` 的 callback 用它做兩件事:登入時用 `canPlayer(playerId, '<app>.access')` 順便檢查這個 Player 有沒有權限用該 app,以及查伺服器端維護的「app → 導回網址」對照表決定登入完成後導去哪裡。
+各 side project 有自己的登入介面,但共用同一個 `auth` 的 Google OAuth、Player 身分與 JWT/refresh token 機制。前端不需要在登入請求上額外帶任何參數(例如 `app=catCare`)——`auth` 讀取請求的 `Referer` header 取得發起登入的網域,查伺服器端維護的「網域 → app」對照表,決定:
 
-考慮過讓前端直接帶一個 `redirectUrl` 參數,`auth` 登入完直接導過去,這樣加新 app 不用改 `auth` 的設定。但這等於讓 `auth` 相信任何呼叫端指定的網址,若沒有嚴謹的白名單驗證,就是一個 open redirect 漏洞,可能被用來把使用者導去釣魚頁面。改用伺服器端設定的對照表,前端只能傳 app 名稱、不能指定實際網址,雖然加新 app 時要多一步設定,但杜絕了這個風險。
+1. 用 `canPlayer(playerId, '<app>.access')` 檢查這個 Player 有沒有權限用該 app
+2. 登入完成後導回這個網域對應設定好的網址
+
+`Referer` 而非 `Origin`,是因為導去 `/api/v1/auth/google` 是一般的瀏覽器頁面導轉(使用者點登入連結),不是 fetch/XHR——`Origin` header 在這種請求通常不會帶,`Referer` 才是瀏覽器導轉時記錄「從哪個頁面來」的機制。
+
+若 `Referer` 缺失(使用者瀏覽器隱私設定、或前端自己設了 `Referrer-Policy: no-referrer`)導致查不到對應的 app,直接回 400 拒絕,不做預設 app 的 fallback——因為這些前端都是自己掌控的網站,可以確保不要設會阻擋 `Referer` 的 policy,比起 fallback 到某個預設 app、讓使用者悄悄登入錯 app 更安全。
+
+導回網址一樣不接受前端指定,只能是對照表裡登記過的網址,避免 open redirect。
