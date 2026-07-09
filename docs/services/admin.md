@@ -2,7 +2,7 @@
 
 ## 目的
 
-管理其他 5 個 side project 的後台 app。操作者是 `User`,跟一般 side project 的 `Player` 是完全不同的身分概念(詳見 [`CONTEXT.md`](../../CONTEXT.md))。登入驗證掛在 `auth` 底下,但可能開放給 Parker 之外的其他 User 登入,因此需要獨立的一套 RBAC。
+管理其他 side project 的後台 app。操作者是 `User`,跟一般 side project 的 `Player` 是完全不同的身分概念(詳見 [`CONTEXT.md`](../../CONTEXT.md))。登入驗證掛在 `auth` 底下,但可能開放給 Parker 之外的其他 User 登入,因此需要獨立的一套 RBAC。
 
 ## 帳號與權限設計
 
@@ -11,9 +11,22 @@
 - User RBAC 跟 Player RBAC 是兩套獨立規則表,共用 `namespace.resource.action` 命名慣例(例如 `admin.fitTrack.viewPlayers`),但各自存放在不同的規則表,語意上不混用
 - User RBAC 有 Role 分層:規則(`admin.*`)綁在 Role 上,核准或調整 User 時只需指派 Role,不用逐條勾規則
 
+## Role 目錄
+
+先設計 2 個 Role,不做按 service 拆分的精細角色(目前 Admin Dashboard 使用者主要是 Parker 自己,「其他人也可能登入」還只是預留的可能性):
+
+- **SuperAdmin**:擁有所有 `admin.*` 規則,含審核新 User、指派 Role 的權限本身
+- **Viewer**:對每個 service 只有唯讀規則(例如 `admin.catCare.viewAll`、`admin.billSplit.viewAll`),不能改資料、不能審核新 User
+
+之後如果真的有多人協作、需要按 service 分工(例如朋友只負責管理 bill-split),再依同樣命名慣例新增更細的 Role。
+
+## 前端技術
+
+Next.js(React),與其他前端保持一致的技術棧慣例,方便共用元件、共用 Hono OpenAPI 產生的 Zod 型別。詳見 [`docs/adr/0003-admin-dashboard-nextjs.md`](../adr/0003-admin-dashboard-nextjs.md)。
+
 ## 管轄範圍
 
-管理全部 5 個 side project,包含 `fit-track`。`fit-track` 的 Player 帳號系統雖然獨立於 `auth` 之外,但這只影響 Player 登入機制,不影響 Admin Dashboard 對它的管理權限。
+管理全部其他 side project,包含 `fit-track`。`fit-track` 的 Player 帳號系統雖然獨立於 `auth` 之外,但這只影響 Player 登入機制,不影響 Admin Dashboard 對它的管理權限。
 
 ## 資料庫
 
@@ -22,6 +35,6 @@
 ## 可能功能
 
 - User 申請登入(Google OAuth)/ 待審核狀態
-- 既有 User 審核並核准新申請、指派 Role
+- 既有 User 審核並核准新申請、指派 Role(SuperAdmin / Viewer)
 - Role 與 `admin.*` 規則的管理介面
-- 檢視 / 管理 5 個 side project(含 fit-track)的資料
+- 檢視 / 管理其他 side project(含 fit-track)的資料
