@@ -7,11 +7,15 @@ import type { Context } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { verifyAdminAccessToken } from "./jwt.js";
 import {
+  addToWhitelist,
   approveUser,
   applyOrLoginWithGoogleProfile,
   canApproveUsers,
+  canManageWhitelist,
   canUser,
+  listWhitelist,
   refreshSession,
+  removeFromWhitelist,
 } from "./service.js";
 
 const STATE_COOKIE = "admin_oauth_state";
@@ -68,13 +72,23 @@ const refreshResponseSchema = z.object({
   accessToken: z.string(),
 });
 
+const roleNameSchema = z.enum(["Owner", "SuperAdmin", "Viewer"]);
+
 const approveBodySchema = z.object({
-  roleName: z.enum(["Owner", "SuperAdmin", "Viewer"]),
+  roleName: roleNameSchema,
 });
 
 const roleSchema = z.object({
   id: z.string().uuid(),
   name: z.string(),
+  createdAt: z.string(),
+});
+
+const whitelistEntrySchema = z.object({
+  id: z.string().uuid(),
+  email: z.string().email(),
+  roleId: z.string().uuid(),
+  createdBy: z.string().uuid(),
   createdAt: z.string(),
 });
 
@@ -446,5 +460,120 @@ adminRoutes.openapi(removeRuleRoute, async (c) => {
 
   const { roleId, rule } = c.req.valid("param");
   await removeRuleFromRole(roleId, rule);
+  return c.body(null, 204);
+});
+
+// 邀請白名單(ADR-0001 的 Whitelist 段落):只有握有 admin.whitelist.manage 的人(即 Owner)
+// 能管理,命中白名單的 email 登入時直接核准,見 service.ts 的 applyOrLoginWithGoogleProfile。
+type WhitelistGuard =
+  | { ok: true; userId: string }
+  | { ok: false; status: 401 | 403; error: string };
+
+async function requireWhitelistManager(c: Context): Promise<WhitelistGuard> {
+  const auth = await authenticateAdminCaller(c);
+  if (!auth.ok) {
+    return { ok: false, status: auth.status, error: auth.error };
+  }
+
+  if (!(await canManageWhitelist(auth.userId))) {
+    return { ok: false, status: 403, error: "forbidden" };
+  }
+
+  return { ok: true, userId: auth.userId };
+}
+
+const listWhitelistRoute = createRoute({
+  method: "get",
+  path: "/whitelist",
+  tags: ["admin"],
+  summary: "List invite whitelist entries (requires admin.whitelist.manage)",
+  responses: {
+    200: {
+      description: "Whitelist entries",
+      content: { "application/json": { schema: z.array(whitelistEntrySchema) } },
+    },
+    401: {
+      description: "Missing or invalid caller access token",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    403: {
+      description: "Caller lacks admin.whitelist.manage",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+  },
+});
+
+adminRoutes.openapi(listWhitelistRoute, async (c) => {
+  const guard = await requireWhitelistManager(c);
+  if (!guard.ok) return c.json({ error: guard.error }, guard.status);
+
+  const entries = await listWhitelist();
+  return c.json(entries, 200);
+});
+
+const addToWhitelistRoute = createRoute({
+  method: "post",
+  path: "/whitelist",
+  tags: ["admin"],
+  summary: "Add (or update) an invite whitelist entry (requires admin.whitelist.manage)",
+  request: {
+    body: {
+      content: {
+        "application/json": {
+          schema: z.object({ email: z.string().email(), roleName: roleNameSchema }),
+        },
+      },
+    },
+  },
+  responses: {
+    201: {
+      description: "Whitelist entry created or updated",
+      content: { "application/json": { schema: whitelistEntrySchema } },
+    },
+    401: {
+      description: "Missing or invalid caller access token",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    403: {
+      description: "Caller lacks admin.whitelist.manage",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+  },
+});
+
+adminRoutes.openapi(addToWhitelistRoute, async (c) => {
+  const guard = await requireWhitelistManager(c);
+  if (!guard.ok) return c.json({ error: guard.error }, guard.status);
+
+  const { email, roleName } = c.req.valid("json");
+  const entry = await addToWhitelist(guard.userId, email, roleName);
+  return c.json(entry, 201);
+});
+
+const removeFromWhitelistRoute = createRoute({
+  method: "delete",
+  path: "/whitelist/{email}",
+  tags: ["admin"],
+  summary: "Remove an invite whitelist entry (requires admin.whitelist.manage)",
+  request: { params: z.object({ email: z.string().email() }) },
+  responses: {
+    204: { description: "Whitelist entry removed" },
+    401: {
+      description: "Missing or invalid caller access token",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    403: {
+      description: "Caller lacks admin.whitelist.manage",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+  },
+});
+
+adminRoutes.openapi(removeFromWhitelistRoute, async (c) => {
+  const guard = await requireWhitelistManager(c);
+  if (!guard.ok) return c.json({ error: guard.error }, guard.status);
+
+  const { email } = c.req.valid("param");
+  await removeFromWhitelist(email);
   return c.body(null, 204);
 });

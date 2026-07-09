@@ -55,24 +55,41 @@ export type ApplyOrLoginResult =
       user: ReturnType<typeof toPublicUser>;
     };
 
-// ADR-0001:User 不是自動註冊,是「申請 → 待審核 → 既有 User 核准」;SUPER_ADMIN_EMAILS
-// 是第一個 User 的 bootstrap 特判,略過審核直接核准為 Owner(見 docs/adr/0001、ADR-0007——
-// Owner 才是 SuperAdmin 的規則超集,bootstrap 進來的人要能管理 Role/白名單)。
+// ADR-0001:User 不是自動註冊,是「申請 → 待審核 → 既有 User 核准」,除非命中下面兩種
+// 自動核准情境之一:
+//   1. 邀請白名單(Owner 預先登記 email + Role)——優先順序最高,是日常「已知會加入的人」用的
+//   2. SUPER_ADMIN_EMAILS bootstrap——系統剛啟動、還沒有任何 User 可以核准或維護白名單時的
+//      一次性特判,略過審核直接核准為 Owner(ADR-0007:Owner 才是 SuperAdmin 的規則超集)
+// 兩者都沒命中才落回原本「建立待審核紀錄」的流程。
 export async function applyOrLoginWithGoogleProfile(profile: GoogleProfile): Promise<ApplyOrLoginResult> {
   let user = await repo.findUserByGoogleSub(profile.sub);
 
   if (!user) {
-    const isBootstrap = isBootstrapOwnerEmail(profile.email);
-    const ownerRoleId = isBootstrap ? await findRoleIdByName("Owner") : undefined;
+    const whitelistEntry = await repo.findWhitelistEntryByEmail(profile.email);
 
-    user = await repo.createUser({
-      googleSub: profile.sub,
-      email: profile.email,
-      name: profile.name,
-      avatarUrl: profile.picture,
-      roleId: ownerRoleId,
-      approvedAt: ownerRoleId ? new Date() : undefined,
-    });
+    if (whitelistEntry) {
+      user = await repo.createUser({
+        googleSub: profile.sub,
+        email: profile.email,
+        name: profile.name,
+        avatarUrl: profile.picture,
+        roleId: whitelistEntry.roleId,
+        approvedBy: whitelistEntry.createdBy,
+        approvedAt: new Date(),
+      });
+    } else {
+      const isBootstrap = isBootstrapOwnerEmail(profile.email);
+      const ownerRoleId = isBootstrap ? await findRoleIdByName("Owner") : undefined;
+
+      user = await repo.createUser({
+        googleSub: profile.sub,
+        email: profile.email,
+        name: profile.name,
+        avatarUrl: profile.picture,
+        roleId: ownerRoleId,
+        approvedAt: ownerRoleId ? new Date() : undefined,
+      });
+    }
   }
 
   if (!user.roleId) {
@@ -124,4 +141,25 @@ export async function approveUser(callerId: string, targetUserId: string, roleNa
   }
 
   return toPublicUser(user);
+}
+
+export async function canManageWhitelist(userId: string): Promise<boolean> {
+  return canUser(userId, "admin.whitelist.manage");
+}
+
+export async function addToWhitelist(callerId: string, email: string, roleName: string) {
+  const roleId = await findRoleIdByName(roleName);
+  if (!roleId) {
+    throw new Error("unknown_role");
+  }
+
+  return repo.upsertWhitelistEntry({ email, roleId, createdBy: callerId });
+}
+
+export async function listWhitelist() {
+  return repo.listWhitelistEntries();
+}
+
+export async function removeFromWhitelist(email: string): Promise<void> {
+  return repo.deleteWhitelistEntryByEmail(email);
 }

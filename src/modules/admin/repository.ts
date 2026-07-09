@@ -1,6 +1,6 @@
 import { and, eq, isNull } from "drizzle-orm";
 import { db } from "../../shared/db.js";
-import { refreshTokens, users } from "./schema.js";
+import { inviteWhitelist, refreshTokens, users } from "./schema.js";
 
 export async function findUserByGoogleSub(googleSub: string) {
   const [user] = await db.select().from(users).where(eq(users.googleSub, googleSub)).limit(1);
@@ -18,6 +18,7 @@ export async function createUser(input: {
   name: string;
   avatarUrl?: string;
   roleId?: string;
+  approvedBy?: string;
   approvedAt?: Date;
 }) {
   const [user] = await db.insert(users).values(input).returning();
@@ -34,6 +35,36 @@ export async function updateUserRole(
     .where(eq(users.id, userId))
     .returning();
   return user;
+}
+
+export async function findWhitelistEntryByEmail(email: string) {
+  const [entry] = await db
+    .select()
+    .from(inviteWhitelist)
+    .where(eq(inviteWhitelist.email, email))
+    .limit(1);
+  return entry;
+}
+
+export async function listWhitelistEntries() {
+  return db.select().from(inviteWhitelist);
+}
+
+// upsert:Owner 改指定 email 的預先核准 Role 是合理的操作,不用先刪再加。
+export async function upsertWhitelistEntry(input: { email: string; roleId: string; createdBy: string }) {
+  const [entry] = await db
+    .insert(inviteWhitelist)
+    .values(input)
+    .onConflictDoUpdate({
+      target: inviteWhitelist.email,
+      set: { roleId: input.roleId, createdBy: input.createdBy },
+    })
+    .returning();
+  return entry;
+}
+
+export async function deleteWhitelistEntryByEmail(email: string): Promise<void> {
+  await db.delete(inviteWhitelist).where(eq(inviteWhitelist.email, email));
 }
 
 export async function insertRefreshToken(input: { userId: string; tokenHash: string; expiresAt: Date }) {

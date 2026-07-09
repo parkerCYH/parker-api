@@ -336,4 +336,89 @@ describe("admin routes", () => {
     ).json()) as Array<{ id: string }>;
     expect(listAfterDelete.some((r) => r.id === role.id)).toBe(false);
   });
+
+  it("rejects whitelist API calls from a User without admin.whitelist.manage", async () => {
+    const viewerProfile = {
+      sub: `google-viewer-wl-${randomUUID()}`,
+      email: `viewer-wl-${randomUUID()}@example.com`,
+      name: "Viewer for whitelist test",
+      picture: "https://example.com/avatar.png",
+    };
+    const viewer = await loginWithRole(viewerProfile, "Viewer");
+
+    const res = await app.request("/api/v1/admin/whitelist", {
+      headers: { authorization: `Bearer ${viewer.accessToken}` },
+    });
+
+    expect(res.status).toBe(403);
+  });
+
+  it("auto-approves a whitelisted email with the pre-assigned Role on first login (ADR-0001)", async () => {
+    const owner = (await (await loginAs(OWNER_PROFILE)).json()) as ApprovedResponse;
+    const authHeader = { authorization: `Bearer ${owner.accessToken}` };
+
+    const invitedProfile = {
+      sub: `google-invited-${randomUUID()}`,
+      email: `invited-${randomUUID()}@example.com`,
+      name: "Invited User",
+      picture: "https://example.com/avatar.png",
+    };
+
+    const addRes = await app.request("/api/v1/admin/whitelist", {
+      method: "POST",
+      headers: { "content-type": "application/json", ...authHeader },
+      body: JSON.stringify({ email: invitedProfile.email, roleName: "Viewer" }),
+    });
+    expect(addRes.status).toBe(201);
+
+    const listRes = await app.request("/api/v1/admin/whitelist", { headers: authHeader });
+    const entries = (await listRes.json()) as Array<{ email: string }>;
+    expect(entries.some((e) => e.email === invitedProfile.email)).toBe(true);
+
+    // 第一次登入就該直接核准,不是 pending
+    const loginRes = await loginAs(invitedProfile);
+    expect(loginRes.status).toBe(200);
+    const body = (await loginRes.json()) as ApprovedResponse;
+    expect(body.status).toBe("approved");
+
+    // 套用的是白名單指定的 Viewer,能看 cat-care gateway route 但不能管 Role
+    const catCareRes = await app.request("/api/v1/admin/cat-care/cats", {
+      headers: { authorization: `Bearer ${body.accessToken}` },
+    });
+    expect(catCareRes.status).toBe(200);
+
+    const rolesRes = await app.request("/api/v1/admin/roles", {
+      headers: { authorization: `Bearer ${body.accessToken}` },
+    });
+    expect(rolesRes.status).toBe(403);
+  });
+
+  it("removes a whitelist entry so the email falls back to the pending flow", async () => {
+    const owner = (await (await loginAs(OWNER_PROFILE)).json()) as ApprovedResponse;
+    const authHeader = { authorization: `Bearer ${owner.accessToken}` };
+
+    const removedProfile = {
+      sub: `google-removed-${randomUUID()}`,
+      email: `removed-${randomUUID()}@example.com`,
+      name: "Removed From Whitelist",
+      picture: "https://example.com/avatar.png",
+    };
+
+    await app.request("/api/v1/admin/whitelist", {
+      method: "POST",
+      headers: { "content-type": "application/json", ...authHeader },
+      body: JSON.stringify({ email: removedProfile.email, roleName: "Viewer" }),
+    });
+
+    const deleteRes = await app.request(
+      `/api/v1/admin/whitelist/${encodeURIComponent(removedProfile.email)}`,
+      { method: "DELETE", headers: authHeader },
+    );
+    expect(deleteRes.status).toBe(204);
+
+    const loginRes = await loginAs(removedProfile);
+    expect(loginRes.status).toBe(202);
+    const body = (await loginRes.json()) as PendingResponse;
+    expect(body.status).toBe("pending");
+  });
 });

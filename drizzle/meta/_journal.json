@@ -43,6 +43,13 @@
       "when": 1783609967771,
       "tag": "0005_many_white_queen",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1783610728089,
+      "tag": "0006_black_nekra",
+      "breakpoints": true
     }
   ]
 }

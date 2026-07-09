@@ -22,6 +22,21 @@ export const users = adminSchema.table("users", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+// 邀請白名單(ADR-0001 的 Whitelist 段落):命中的 email 登入時直接核准、套用指定的 role_id,
+// 不用走「建立待審核紀錄 → 手動核准」。role_id 一樣指回 rbac.roles.id(見上面 users 的註解,
+// 同樣的跨 module 限制,不用 Drizzle 的 .references())。
+export const inviteWhitelist = adminSchema.table("invite_whitelist", {
+  id: uuid("id")
+    .primaryKey()
+    .$defaultFn(() => randomUUID()),
+  email: text("email").notNull().unique(),
+  roleId: uuid("role_id").notNull(),
+  createdBy: uuid("created_by")
+    .notNull()
+    .references(() => users.id),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const refreshTokens = adminSchema.table("refresh_tokens", {
   id: uuid("id")
     .primaryKey()
