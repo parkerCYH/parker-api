@@ -3,6 +3,7 @@ import { OpenAPIHono } from "@hono/zod-openapi";
 import { errorHandler } from "./shared/error-handler.js";
 import { authRoutes } from "./modules/auth/index.js";
 import { adminRoutes } from "./modules/admin/index.js";
+import { catCareRoutes } from "./modules/cat-care/index.js";
 
 const app = new OpenAPIHono();
 
@@ -12,6 +13,7 @@ app.get("/health", (c) => c.json({ status: "ok" }));
 
 app.route("/api/v1/auth", authRoutes);
 app.route("/api/v1/admin", adminRoutes);
+app.route("/api/v1/cat-care", catCareRoutes);
 
 app.doc("/openapi.json", {
   openapi: "3.0.0",

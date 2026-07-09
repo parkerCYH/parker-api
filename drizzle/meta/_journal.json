@@ -15,6 +15,13 @@
       "when": 1783595560988,
       "tag": "0001_worried_devos",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1783598015778,
+      "tag": "0002_bored_spot",
+      "breakpoints": true
     }
   ]
 }
