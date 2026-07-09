@@ -13,6 +13,9 @@ export default defineConfig({
       GOOGLE_CLIENT_SECRET: process.env.GOOGLE_CLIENT_SECRET ?? "test-google-client-secret",
       GOOGLE_REDIRECT_URI:
         process.env.GOOGLE_REDIRECT_URI ?? "http://localhost:3001/api/v1/auth/google/callback",
+      ADMIN_GOOGLE_REDIRECT_URI:
+        process.env.ADMIN_GOOGLE_REDIRECT_URI ??
+        "http://localhost:3001/api/v1/admin/login/google/callback",
     },
   },
 });

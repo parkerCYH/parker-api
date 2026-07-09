@@ -9,10 +9,14 @@ export interface GoogleProfile {
   picture?: string;
 }
 
-export function buildGoogleAuthUrl(state: string): string {
+// redirectUri 由呼叫端明確傳入(不在這裡讀寫死的環境變數):auth(Player 登入)跟 admin
+// (User 申請/登入)是兩條不同的 callback 路徑,各自要在 Google OAuth client 註冊各自的
+// redirect URI,共用同一個值會導致其中一邊的 token 交換失敗(Google 要求兩次請求的
+// redirect_uri 完全一致)。
+export function buildGoogleAuthUrl(state: string, redirectUri: string): string {
   const params = new URLSearchParams({
     client_id: process.env.GOOGLE_CLIENT_ID ?? "",
-    redirect_uri: process.env.GOOGLE_REDIRECT_URI ?? "",
+    redirect_uri: redirectUri,
     response_type: "code",
     scope: "openid email profile",
     state,
@@ -21,7 +25,7 @@ export function buildGoogleAuthUrl(state: string): string {
   return `${GOOGLE_AUTH_URL}?${params.toString()}`;
 }
 
-export async function exchangeGoogleCode(code: string): Promise<GoogleProfile> {
+export async function exchangeGoogleCode(code: string, redirectUri: string): Promise<GoogleProfile> {
   const tokenRes = await fetch(GOOGLE_TOKEN_URL, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -29,7 +33,7 @@ export async function exchangeGoogleCode(code: string): Promise<GoogleProfile> {
       code,
       client_id: process.env.GOOGLE_CLIENT_ID ?? "",
       client_secret: process.env.GOOGLE_CLIENT_SECRET ?? "",
-      redirect_uri: process.env.GOOGLE_REDIRECT_URI ?? "",
+      redirect_uri: redirectUri,
       grant_type: "authorization_code",
     }),
   });

@@ -1,0 +1,169 @@
+import { randomUUID } from "node:crypto";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import app from "../../app.js";
+
+const SUPER_ADMIN_PROFILE = {
+  sub: `google-superadmin-${randomUUID()}`,
+  email: `superadmin-${randomUUID()}@example.com`,
+  name: "Bootstrap SuperAdmin",
+  picture: "https://example.com/avatar.png",
+};
+
+const APPLICANT_PROFILE = {
+  sub: `google-applicant-${randomUUID()}`,
+  email: `applicant-${randomUUID()}@example.com`,
+  name: "Pending Applicant",
+  picture: "https://example.com/avatar.png",
+};
+
+let currentProfile = SUPER_ADMIN_PROFILE;
+
+function stubGoogleFetch() {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: string | URL | Request) => {
+      const url = typeof input === "string" ? input : input.toString();
+
+      if (url.startsWith("https://oauth2.googleapis.com/token")) {
+        return new Response(JSON.stringify({ access_token: "fake-google-access-token" }), { status: 200 });
+      }
+
+      if (url.startsWith("https://www.googleapis.com/oauth2/v3/userinfo")) {
+        return new Response(JSON.stringify(currentProfile), { status: 200 });
+      }
+
+      throw new Error(`unexpected fetch to ${url}`);
+    }),
+  );
+}
+
+function extractState(location: string): string {
+  return new URL(location).searchParams.get("state") ?? "";
+}
+
+interface PendingResponse {
+  status: "pending";
+  userId: string;
+}
+
+interface ApprovedResponse {
+  status: "approved";
+  accessToken: string;
+  refreshToken: string;
+  user: { id: string; email: string; name: string; avatarUrl?: string };
+}
+
+async function loginAs(profile: typeof SUPER_ADMIN_PROFILE) {
+  currentProfile = profile;
+  stubGoogleFetch();
+
+  const startRes = await app.request("/api/v1/admin/login/google");
+  const cookie = startRes.headers.get("set-cookie") ?? "";
+  const state = extractState(startRes.headers.get("location") ?? "");
+
+  const res = await app.request(`/api/v1/admin/login/google/callback?code=fake-code&state=${state}`, {
+    headers: { cookie },
+  });
+
+  return res;
+}
+
+describe("admin routes", () => {
+  beforeAll(() => {
+    process.env.SUPER_ADMIN_EMAILS = SUPER_ADMIN_PROFILE.email;
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("bootstraps the first User via SUPER_ADMIN_EMAILS with SuperAdmin role", async () => {
+    const res = await loginAs(SUPER_ADMIN_PROFILE);
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as ApprovedResponse;
+    expect(body.status).toBe("approved");
+    expect(body.accessToken).toEqual(expect.any(String));
+    expect(body.user.email).toBe(SUPER_ADMIN_PROFILE.email);
+  });
+
+  it("creates a pending application for a non-allowlisted email", async () => {
+    const res = await loginAs(APPLICANT_PROFILE);
+
+    expect(res.status).toBe(202);
+    const body = (await res.json()) as PendingResponse;
+    expect(body.status).toBe("pending");
+    expect(body.userId).toEqual(expect.any(String));
+  });
+
+  it("rejects approval attempts without a caller access token", async () => {
+    const applicantRes = await loginAs(APPLICANT_PROFILE);
+    const { userId } = (await applicantRes.json()) as PendingResponse;
+
+    const res = await app.request(`/api/v1/admin/users/${userId}/approve`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ roleName: "Viewer" }),
+    });
+
+    expect(res.status).toBe(401);
+  });
+
+  it("lets a SuperAdmin approve a pending applicant and assign a Role", async () => {
+    const superAdminLogin = (await (await loginAs(SUPER_ADMIN_PROFILE)).json()) as ApprovedResponse;
+    const applicantLogin = (await (await loginAs(APPLICANT_PROFILE)).json()) as PendingResponse;
+
+    const res = await app.request(`/api/v1/admin/users/${applicantLogin.userId}/approve`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${superAdminLogin.accessToken}`,
+      },
+      body: JSON.stringify({ roleName: "Viewer" }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { id: string; email: string };
+    expect(body.email).toBe(APPLICANT_PROFILE.email);
+
+    const secondLogin = (await loginAs(APPLICANT_PROFILE)).status === 200;
+    expect(secondLogin).toBe(true);
+  });
+
+  it("forbids a Viewer from approving other applications", async () => {
+    const viewerLogin = (await (await loginAs(APPLICANT_PROFILE)).json()) as ApprovedResponse;
+
+    const anotherApplicant = {
+      sub: `google-another-${randomUUID()}`,
+      email: `another-${randomUUID()}@example.com`,
+      name: "Another Applicant",
+      picture: "https://example.com/avatar.png",
+    };
+    const anotherLogin = (await (await loginAs(anotherApplicant)).json()) as PendingResponse;
+
+    const res = await app.request(`/api/v1/admin/users/${anotherLogin.userId}/approve`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${viewerLogin.accessToken}`,
+      },
+      body: JSON.stringify({ roleName: "Viewer" }),
+    });
+
+    expect(res.status).toBe(403);
+  });
+
+  it("issues a new access token via refresh", async () => {
+    const login = (await (await loginAs(SUPER_ADMIN_PROFILE)).json()) as ApprovedResponse;
+
+    const res = await app.request("/api/v1/admin/refresh", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ refreshToken: login.refreshToken }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { accessToken: string };
+    expect(body.accessToken).toEqual(expect.any(String));
+  });
+});

@@ -53,7 +53,7 @@ authRoutes.openapi(googleLoginRoute, (c) => {
     path: "/",
   });
 
-  return c.redirect(buildGoogleAuthUrl(state));
+  return c.redirect(buildGoogleAuthUrl(state, process.env.GOOGLE_REDIRECT_URI ?? ""));
 });
 
 const googleCallbackRoute = createRoute({
@@ -89,7 +89,7 @@ authRoutes.openapi(googleCallbackRoute, async (c) => {
     return c.json({ error: "invalid_oauth_state" }, 400);
   }
 
-  const profile = await exchangeGoogleCode(code);
+  const profile = await exchangeGoogleCode(code, process.env.GOOGLE_REDIRECT_URI ?? "");
   const session = await loginWithGoogleProfile(profile);
 
   return c.json(session, 200);
