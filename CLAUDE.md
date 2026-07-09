@@ -15,3 +15,7 @@ Single-context layout — one `CONTEXT.md` + `docs/adr/` at the repo root. See `
 ## Database conventions
 
 This project has a single developer (parkerCYH). Keep the DB schema stable — prefer designing tables/columns to accommodate known future needs up front rather than iterating via many small migrations. Avoid generating a new migration for every minor tweak; batch related schema changes into one migration where possible.
+
+## Code structure
+
+Backend is Hono + Drizzle + PostgreSQL, single package (no monorepo/workspace — the Next.js admin frontend lives in a separate repo). Source is organized as one folder per service under `src/modules/<service>/`, matching the PostgreSQL schema name; each module only exposes its `index.ts` to other modules. Tests are e2e-only, colocated with the module they test, run with Vitest against a real Postgres database. See `docs/adr/0004-module-structure-and-e2e-testing.md`.
