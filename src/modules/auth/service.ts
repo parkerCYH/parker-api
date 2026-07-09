@@ -59,3 +59,12 @@ export async function canPlayer(playerId: string, rule: string): Promise<boolean
 
 export const grantAccess = repo.grantAccess;
 export const revokeAccess = repo.revokeAccess;
+export const listPlayersWithAccess = repo.listPlayerIdsWithGrant;
+
+// 給其他 module 的 gateway route 用(見 ticket #20):cat-care 等 service 只知道 player_id,
+// 沒有 email/name 這類基本資料,組合 admin 的回應時需要這支補上 Player 基本資料。
+export async function getPlayerProfile(playerId: string) {
+  const player = await repo.findPlayerById(playerId);
+  if (!player) return undefined;
+  return toPublicPlayer(player);
+}

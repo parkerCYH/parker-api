@@ -7,6 +7,11 @@ export async function findPlayerByGoogleSub(googleSub: string) {
   return player;
 }
 
+export async function findPlayerById(id: string) {
+  const [player] = await db.select().from(players).where(eq(players.id, id)).limit(1);
+  return player;
+}
+
 export async function createPlayer(input: {
   googleSub: string;
   email: string;
@@ -49,6 +54,14 @@ export async function grantAccess(playerId: string, rule: string): Promise<void>
     .insert(playerGrants)
     .values({ playerId, rule })
     .onConflictDoNothing({ target: [playerGrants.playerId, playerGrants.rule] });
+}
+
+export async function listPlayerIdsWithGrant(rule: string): Promise<string[]> {
+  const rows = await db
+    .select({ playerId: playerGrants.playerId })
+    .from(playerGrants)
+    .where(eq(playerGrants.rule, rule));
+  return rows.map((row) => row.playerId);
 }
 
 export async function revokeAccess(playerId: string, rule: string): Promise<void> {

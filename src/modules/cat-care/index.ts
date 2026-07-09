@@ -1,2 +1,9 @@
 export { catCareRoutes } from "./routes.js";
-export { listAllCats } from "./service.js";
+export {
+  getCat,
+  getCatCarePlayer,
+  listAllCats,
+  listBowelMovements,
+  listCatCarePlayers,
+  listWeightRecords,
+} from "./service.js";

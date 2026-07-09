@@ -1,3 +1,4 @@
+import { canPlayer, listPlayersWithAccess } from "../auth/index.js";
 import * as repo from "./repository.js";
 
 export async function createCat(
@@ -60,3 +61,39 @@ export async function listWeightRecords(catId: string) {
 
 // 給 admin module 當 gateway 呼叫(見 ticket #14、ADR-0005),cat-care 自己不開對外端點。
 export const listAllCats = repo.listAllCats;
+
+// 給 admin 的單一貓咪詳情 gateway route 用(ticket #20)——不像 getCatForPlayer,這裡不檢查
+// membership,admin 的權限檢查(admin.catCare.viewAll)完全在 admin 那一層做掉。
+export async function getCat(catId: string) {
+  return repo.findCatById(catId);
+}
+
+// 「跟 cat-care 有關」的 Player:有 catCare.access,或是至少一隻貓的成員(ticket #20)。
+// 只回 player_id + 所屬貓咪,不含 email/name——那是 auth 的 getPlayerProfile 的事,
+// 組合是 admin gateway route 的責任。
+export async function listCatCarePlayers() {
+  const [grantedPlayerIds, memberPlayerIds] = await Promise.all([
+    listPlayersWithAccess("catCare.access"),
+    repo.listDistinctCatPlayerIds(),
+  ]);
+
+  const playerIds = [...new Set([...grantedPlayerIds, ...memberPlayerIds])];
+
+  return Promise.all(
+    playerIds.map(async (playerId) => ({
+      playerId,
+      cats: await repo.listCatsForPlayer(playerId),
+    })),
+  );
+}
+
+export async function getCatCarePlayer(playerId: string) {
+  const [cats, hasAccess] = await Promise.all([
+    repo.listCatsForPlayer(playerId),
+    canPlayer(playerId, "catCare.access"),
+  ]);
+
+  if (cats.length === 0 && !hasAccess) return undefined;
+
+  return { playerId, cats };
+}

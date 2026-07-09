@@ -88,6 +88,12 @@ export async function listWeightRecords(catId: string) {
     .orderBy(desc(weightRecords.measuredAt));
 }
 
+// 給 admin module 用(ticket #20):cat_players 裡出現過的所有 Player id(不重複)。
+export async function listDistinctCatPlayerIds(): Promise<string[]> {
+  const rows = await db.selectDistinct({ playerId: catPlayers.playerId }).from(catPlayers);
+  return rows.map((row) => row.playerId);
+}
+
 // 給 admin module 用(ADR-0005):跨 Player 的全部貓咪清單,不做 membership 過濾。
 export async function listAllCats() {
   return db

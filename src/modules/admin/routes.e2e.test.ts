@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import app from "../../app.js";
+import { grantAccess } from "../auth/index.js";
 import { createRole } from "../rbac/index.js";
 import { updateUserRole } from "./repository.js";
 import { canUser } from "./service.js";
@@ -86,6 +87,44 @@ async function loginWithRole(profile: typeof OWNER_PROFILE, roleName: "Owner" | 
   });
 
   return (await (await loginAs(profile)).json()) as ApprovedResponse;
+}
+
+// ticket #20 的 gateway route 測試需要真的 cat-care 資料——透過 auth 的 Player 登入
+// (跟 admin 的 User 登入是完全不同的端點)+ catCare.access 授權 + cat-care 自己的 API 建資料,
+// 不直接碰 cat-care 的 repository,走真實流程。
+const CAT_CARE_REFERER = "http://test.cat-care.local/login";
+
+async function loginPlayerWithCatCareAccess() {
+  const playerProfile = {
+    sub: `google-player-${randomUUID()}`,
+    email: `player-${randomUUID()}@example.com`,
+    name: "Cat Care Player",
+    picture: "https://example.com/avatar.png",
+  };
+
+  currentProfile = playerProfile;
+  stubGoogleFetch();
+
+  async function attemptPlayerLogin() {
+    const startRes = await app.request("/api/v1/auth/google", { headers: { referer: CAT_CARE_REFERER } });
+    const cookie = startRes.headers.get("set-cookie") ?? "";
+    const state = extractState(startRes.headers.get("location") ?? "");
+
+    return app.request(`/api/v1/auth/google/callback?code=fake-code&state=${state}`, {
+      headers: { cookie },
+    });
+  }
+
+  const firstAttempt = await attemptPlayerLogin();
+  const { playerId } = (await firstAttempt.json()) as { playerId: string };
+
+  await grantAccess(playerId, "catCare.access");
+
+  const secondAttempt = await attemptPlayerLogin();
+  const location = secondAttempt.headers.get("location") ?? "";
+  const accessToken = new URL(location).searchParams.get("accessToken") ?? "";
+
+  return { playerId, accessToken, profile: playerProfile };
 }
 
 describe("admin routes", () => {
@@ -557,5 +596,130 @@ describe("admin routes", () => {
 
     // Viewer 沒有 admin.users.approve,升級成 SuperAdmin 之後應該有了
     expect(await canUser(viewer.user.id, "admin.users.approve")).toBe(true);
+  });
+
+  it("gives an Owner a single cat's detail, bowel movements, and weight records via the gateway", async () => {
+    const owner = (await (await loginAs(OWNER_PROFILE)).json()) as ApprovedResponse;
+    const adminAuthHeader = { authorization: `Bearer ${owner.accessToken}` };
+
+    const player = await loginPlayerWithCatCareAccess();
+    const playerAuthHeader = { authorization: `Bearer ${player.accessToken}` };
+
+    const createCatRes = await app.request("/api/v1/cat-care/cats", {
+      method: "POST",
+      headers: { "content-type": "application/json", ...playerAuthHeader },
+      body: JSON.stringify({ name: "Gateway Detail Cat" }),
+    });
+    const cat = (await createCatRes.json()) as { id: string; name: string };
+
+    await app.request(`/api/v1/cat-care/cats/${cat.id}/bowel-movements`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...playerAuthHeader },
+      body: JSON.stringify({ stoolType: "normal", isAbnormal: false }),
+    });
+    await app.request(`/api/v1/cat-care/cats/${cat.id}/weight-records`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...playerAuthHeader },
+      body: JSON.stringify({ weightGrams: 4300 }),
+    });
+
+    const detailRes = await app.request(`/api/v1/admin/cat-care/cats/${cat.id}`, {
+      headers: adminAuthHeader,
+    });
+    expect(detailRes.status).toBe(200);
+    const detail = (await detailRes.json()) as { id: string; name: string };
+    expect(detail.name).toBe("Gateway Detail Cat");
+
+    const bowelRes = await app.request(`/api/v1/admin/cat-care/cats/${cat.id}/bowel-movements`, {
+      headers: adminAuthHeader,
+    });
+    expect(bowelRes.status).toBe(200);
+    const bowelRecords = (await bowelRes.json()) as unknown[];
+    expect(bowelRecords.length).toBeGreaterThanOrEqual(1);
+
+    const weightRes = await app.request(`/api/v1/admin/cat-care/cats/${cat.id}/weight-records`, {
+      headers: adminAuthHeader,
+    });
+    expect(weightRes.status).toBe(200);
+    const weightRecords = (await weightRes.json()) as Array<{ weightGrams: number }>;
+    expect(weightRecords.some((r) => r.weightGrams === 4300)).toBe(true);
+  });
+
+  it("404s the cat detail/records gateway routes for a nonexistent cat", async () => {
+    const owner = (await (await loginAs(OWNER_PROFILE)).json()) as ApprovedResponse;
+    const authHeader = { authorization: `Bearer ${owner.accessToken}` };
+    const fakeCatId = randomUUID();
+
+    const detailRes = await app.request(`/api/v1/admin/cat-care/cats/${fakeCatId}`, { headers: authHeader });
+    expect(detailRes.status).toBe(404);
+
+    const bowelRes = await app.request(`/api/v1/admin/cat-care/cats/${fakeCatId}/bowel-movements`, {
+      headers: authHeader,
+    });
+    expect(bowelRes.status).toBe(404);
+  });
+
+  it("lists cat-care-related Players with profile info via the gateway", async () => {
+    const owner = (await (await loginAs(OWNER_PROFILE)).json()) as ApprovedResponse;
+    const adminAuthHeader = { authorization: `Bearer ${owner.accessToken}` };
+
+    const player = await loginPlayerWithCatCareAccess();
+
+    const listRes = await app.request("/api/v1/admin/cat-care/players", { headers: adminAuthHeader });
+    expect(listRes.status).toBe(200);
+    const players = (await listRes.json()) as Array<{ player: { id: string; email: string } }>;
+    const found = players.find((p) => p.player.id === player.playerId);
+    expect(found).toBeDefined();
+    expect(found?.player.email).toBe(player.profile.email);
+
+    const detailRes = await app.request(`/api/v1/admin/cat-care/players/${player.playerId}`, {
+      headers: adminAuthHeader,
+    });
+    expect(detailRes.status).toBe(200);
+    const detail = (await detailRes.json()) as { player: { email: string } };
+    expect(detail.player.email).toBe(player.profile.email);
+  });
+
+  it("404s the Player detail gateway route for a Player unrelated to cat-care", async () => {
+    const owner = (await (await loginAs(OWNER_PROFILE)).json()) as ApprovedResponse;
+    const authHeader = { authorization: `Bearer ${owner.accessToken}` };
+
+    const res = await app.request(`/api/v1/admin/cat-care/players/${randomUUID()}`, { headers: authHeader });
+    expect(res.status).toBe(404);
+  });
+
+  it("forbids a caller without admin.catCare.viewAll from the new cat-care gateway routes", async () => {
+    const noRulesRole = await createRole(`NoCatCareRules-${randomUUID()}`);
+
+    const noRulesApplicant = {
+      sub: `google-nocatcare-${randomUUID()}`,
+      email: `nocatcare-${randomUUID()}@example.com`,
+      name: "No CatCare Rules User",
+      picture: "https://example.com/avatar.png",
+    };
+    const applicantLogin = (await (await loginAs(noRulesApplicant)).json()) as PendingResponse;
+    const ownerLogin = (await (await loginAs(OWNER_PROFILE)).json()) as ApprovedResponse;
+
+    await updateUserRole(applicantLogin.userId, {
+      roleId: noRulesRole.id,
+      approvedBy: ownerLogin.user.id,
+      approvedAt: new Date(),
+    });
+
+    const noRulesLogin = (await (await loginAs(noRulesApplicant)).json()) as ApprovedResponse;
+    const authHeader = { authorization: `Bearer ${noRulesLogin.accessToken}` };
+    const someId = randomUUID();
+
+    const results = await Promise.all([
+      app.request(`/api/v1/admin/cat-care/cats/${someId}`, { headers: authHeader }),
+      app.request(`/api/v1/admin/cat-care/cats/${someId}/bowel-movements`, { headers: authHeader }),
+      app.request(`/api/v1/admin/cat-care/cats/${someId}/weight-records`, { headers: authHeader }),
+      app.request("/api/v1/admin/cat-care/players", { headers: authHeader }),
+      app.request(`/api/v1/admin/cat-care/players/${someId}`, { headers: authHeader }),
+    ]);
+
+    for (const res of results) {
+      expect(res.status).toBe(403);
+    }
   });
 });

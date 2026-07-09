@@ -1,6 +1,13 @@
 import { randomBytes } from "node:crypto";
-import { buildGoogleAuthUrl, exchangeGoogleCode } from "../auth/index.js";
-import { listAllCats } from "../cat-care/index.js";
+import { buildGoogleAuthUrl, exchangeGoogleCode, getPlayerProfile } from "../auth/index.js";
+import {
+  getCat,
+  getCatCarePlayer,
+  listAllCats,
+  listBowelMovements,
+  listCatCarePlayers,
+  listWeightRecords,
+} from "../cat-care/index.js";
 import { addRuleToRole, createRole, deleteRole, listRoles, removeRuleFromRole } from "../rbac/index.js";
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import type { Context } from "hono";
@@ -429,16 +436,266 @@ const catCareCatsRoute = createRoute({
   },
 });
 
-adminRoutes.openapi(catCareCatsRoute, async (c) => {
+// 回傳結果而非 Response(同 authenticateAdminCaller 的理由),讓每個 handler 自己用當下
+// 正確型別的 c.json() 產生回應,避免 zod-openapi 的 typed response 型別檢查衝突。
+type CatCareViewGuard = { ok: true } | { ok: false; status: 401 | 403; error: string };
+
+async function requireCatCareViewer(c: Context): Promise<CatCareViewGuard> {
   const auth = await authenticateAdminCaller(c);
-  if (!auth.ok) return c.json({ error: auth.error }, auth.status);
+  if (!auth.ok) {
+    return { ok: false, status: auth.status, error: auth.error };
+  }
 
   if (!(await canUser(auth.userId, "admin.catCare.viewAll"))) {
-    return c.json({ error: "forbidden" }, 403);
+    return { ok: false, status: 403, error: "forbidden" };
   }
+
+  return { ok: true };
+}
+
+adminRoutes.openapi(catCareCatsRoute, async (c) => {
+  const guard = await requireCatCareViewer(c);
+  if (!guard.ok) return c.json({ error: guard.error }, guard.status);
 
   const cats = await listAllCats();
   return c.json(cats, 200);
+});
+
+// ticket #20:單一貓咪詳情、排便/體重紀錄(admin 視角,不做 membership 過濾)、
+// cat-care 相關的 Player 列表與詳情(組合 auth 的 getPlayerProfile 補上 email/name)。
+const bowelMovementSchema = z.object({
+  id: z.string().uuid(),
+  catId: z.string().uuid(),
+  recordedBy: z.string().uuid(),
+  recordedAt: z.string(),
+  stoolType: z.string().nullable().optional(),
+  isAbnormal: z.boolean(),
+  notes: z.string().nullable().optional(),
+  createdAt: z.string(),
+});
+
+const weightRecordSchema = z.object({
+  id: z.string().uuid(),
+  catId: z.string().uuid(),
+  measuredBy: z.string().uuid(),
+  measuredAt: z.string(),
+  weightGrams: z.number(),
+  method: z.string().nullable().optional(),
+  notes: z.string().nullable().optional(),
+  createdAt: z.string(),
+});
+
+const playerProfileSchema = z.object({
+  id: z.string().uuid(),
+  email: z.string().email(),
+  name: z.string(),
+  avatarUrl: z.string().nullable().optional(),
+});
+
+const catCarePlayerSchema = z.object({
+  player: playerProfileSchema,
+  cats: z.array(catCareCatSchema),
+});
+
+const catIdParamSchema = z.object({ catId: z.string().uuid() });
+
+const getCatRoute = createRoute({
+  method: "get",
+  path: "/cat-care/cats/{catId}",
+  tags: ["admin"],
+  summary: "Gateway: get a single cat's detail (requires admin.catCare.viewAll)",
+  request: { params: catIdParamSchema },
+  responses: {
+    200: { description: "Cat", content: { "application/json": { schema: catCareCatSchema } } },
+    401: {
+      description: "Missing or invalid caller access token",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    403: {
+      description: "Caller lacks admin.catCare.viewAll",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    404: {
+      description: "Cat not found",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+  },
+});
+
+adminRoutes.openapi(getCatRoute, async (c) => {
+  const guard = await requireCatCareViewer(c);
+  if (!guard.ok) return c.json({ error: guard.error }, guard.status);
+
+  const { catId } = c.req.valid("param");
+  const cat = await getCat(catId);
+  if (!cat) {
+    return c.json({ error: "not_found" }, 404);
+  }
+
+  return c.json(cat, 200);
+});
+
+const catCareCatBowelMovementsRoute = createRoute({
+  method: "get",
+  path: "/cat-care/cats/{catId}/bowel-movements",
+  tags: ["admin"],
+  summary: "Gateway: a cat's bowel movement history (requires admin.catCare.viewAll)",
+  request: { params: catIdParamSchema },
+  responses: {
+    200: {
+      description: "History",
+      content: { "application/json": { schema: z.array(bowelMovementSchema) } },
+    },
+    401: {
+      description: "Missing or invalid caller access token",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    403: {
+      description: "Caller lacks admin.catCare.viewAll",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    404: {
+      description: "Cat not found",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+  },
+});
+
+adminRoutes.openapi(catCareCatBowelMovementsRoute, async (c) => {
+  const guard = await requireCatCareViewer(c);
+  if (!guard.ok) return c.json({ error: guard.error }, guard.status);
+
+  const { catId } = c.req.valid("param");
+  if (!(await getCat(catId))) {
+    return c.json({ error: "not_found" }, 404);
+  }
+
+  const records = await listBowelMovements(catId);
+  return c.json(records, 200);
+});
+
+const catCareCatWeightRecordsRoute = createRoute({
+  method: "get",
+  path: "/cat-care/cats/{catId}/weight-records",
+  tags: ["admin"],
+  summary: "Gateway: a cat's weight history (requires admin.catCare.viewAll)",
+  request: { params: catIdParamSchema },
+  responses: {
+    200: {
+      description: "History",
+      content: { "application/json": { schema: z.array(weightRecordSchema) } },
+    },
+    401: {
+      description: "Missing or invalid caller access token",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    403: {
+      description: "Caller lacks admin.catCare.viewAll",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    404: {
+      description: "Cat not found",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+  },
+});
+
+adminRoutes.openapi(catCareCatWeightRecordsRoute, async (c) => {
+  const guard = await requireCatCareViewer(c);
+  if (!guard.ok) return c.json({ error: guard.error }, guard.status);
+
+  const { catId } = c.req.valid("param");
+  if (!(await getCat(catId))) {
+    return c.json({ error: "not_found" }, 404);
+  }
+
+  const records = await listWeightRecords(catId);
+  return c.json(records, 200);
+});
+
+const listCatCarePlayersRoute = createRoute({
+  method: "get",
+  path: "/cat-care/players",
+  tags: ["admin"],
+  summary:
+    "Gateway: Players related to cat-care (have catCare.access or belong to a cat), with profile (requires admin.catCare.viewAll)",
+  responses: {
+    200: {
+      description: "Players",
+      content: { "application/json": { schema: z.array(catCarePlayerSchema) } },
+    },
+    401: {
+      description: "Missing or invalid caller access token",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    403: {
+      description: "Caller lacks admin.catCare.viewAll",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+  },
+});
+
+adminRoutes.openapi(listCatCarePlayersRoute, async (c) => {
+  const guard = await requireCatCareViewer(c);
+  if (!guard.ok) return c.json({ error: guard.error }, guard.status);
+
+  const players = await listCatCarePlayers();
+
+  const withProfiles = await Promise.all(
+    players.map(async (p) => {
+      const player = await getPlayerProfile(p.playerId);
+      return player ? { player, cats: p.cats } : undefined;
+    }),
+  );
+
+  return c.json(withProfiles.filter((p) => p !== undefined), 200);
+});
+
+const catCarePlayerParamSchema = z.object({ playerId: z.string().uuid() });
+
+const getCatCarePlayerRoute = createRoute({
+  method: "get",
+  path: "/cat-care/players/{playerId}",
+  tags: ["admin"],
+  summary: "Gateway: a single cat-care-related Player's detail (requires admin.catCare.viewAll)",
+  request: { params: catCarePlayerParamSchema },
+  responses: {
+    200: {
+      description: "Player detail",
+      content: { "application/json": { schema: catCarePlayerSchema } },
+    },
+    401: {
+      description: "Missing or invalid caller access token",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    403: {
+      description: "Caller lacks admin.catCare.viewAll",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    404: {
+      description: "Player not found, or not related to cat-care",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+  },
+});
+
+adminRoutes.openapi(getCatCarePlayerRoute, async (c) => {
+  const guard = await requireCatCareViewer(c);
+  if (!guard.ok) return c.json({ error: guard.error }, guard.status);
+
+  const { playerId } = c.req.valid("param");
+
+  const catCarePlayer = await getCatCarePlayer(playerId);
+  if (!catCarePlayer) {
+    return c.json({ error: "not_found" }, 404);
+  }
+
+  const player = await getPlayerProfile(playerId);
+  if (!player) {
+    return c.json({ error: "not_found" }, 404);
+  }
+
+  return c.json({ player, cats: catCarePlayer.cats }, 200);
 });
 
 // Role/Rule 管理(ADR-0007):所有這些 route 都要求 rbac.roles.manage,通過後直接呼叫
