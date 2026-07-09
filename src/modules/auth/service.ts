@@ -9,7 +9,27 @@ function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
 
-async function issueSession(playerId: string) {
+function toPublicPlayer(player: { id: string; email: string; name: string; avatarUrl: string | null }) {
+  return { id: player.id, email: player.email, name: player.name, avatarUrl: player.avatarUrl };
+}
+
+// Google profile 換成一個 auth.players 列,找不到就自動註冊(Player 不像 User 需要審核)。
+// 跟 issueSession 分開:ADR-0006 要求先確認這個 Player 有沒有特定 app 的權限,沒有的話
+// 即使 Google 那邊交換成功,也不發 session token。
+export async function findOrCreatePlayer(profile: GoogleProfile) {
+  const player =
+    (await repo.findPlayerByGoogleSub(profile.sub)) ??
+    (await repo.createPlayer({
+      googleSub: profile.sub,
+      email: profile.email,
+      name: profile.name,
+      avatarUrl: profile.picture,
+    }));
+
+  return toPublicPlayer(player);
+}
+
+export async function issueSession(playerId: string) {
   const accessToken = await signAccessToken(playerId);
 
   const refreshToken = randomBytes(32).toString("hex");
@@ -20,29 +40,6 @@ async function issueSession(playerId: string) {
   });
 
   return { accessToken, refreshToken };
-}
-
-export async function loginWithGoogleProfile(profile: GoogleProfile) {
-  const player =
-    (await repo.findPlayerByGoogleSub(profile.sub)) ??
-    (await repo.createPlayer({
-      googleSub: profile.sub,
-      email: profile.email,
-      name: profile.name,
-      avatarUrl: profile.picture,
-    }));
-
-  const session = await issueSession(player.id);
-
-  return {
-    ...session,
-    player: {
-      id: player.id,
-      email: player.email,
-      name: player.name,
-      avatarUrl: player.avatarUrl,
-    },
-  };
 }
 
 export async function refreshSession(rawRefreshToken: string) {

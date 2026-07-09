@@ -4,6 +4,10 @@ import app from "../../app.js";
 import { grantAccess } from "../auth/index.js";
 import { listAllCats } from "./index.js";
 
+const CAT_CARE_REFERER = "http://test.cat-care.local/login";
+// 另一個跟 catCare 無關的 app,用來證明「登入成功、拿到有效 token」不等於「對 catCare 有權限」
+const OTHER_APP_REFERER = "http://test.other-app.local/login";
+
 const AUTHORIZED_PROFILE = {
   sub: `google-player-${randomUUID()}`,
   email: `player-${randomUUID()}@example.com`,
@@ -43,24 +47,37 @@ function extractState(location: string): string {
   return new URL(location).searchParams.get("state") ?? "";
 }
 
-interface LoginResponse {
-  accessToken: string;
-  player: { id: string };
+interface ForbiddenLoginResponse {
+  error: string;
+  playerId: string;
 }
 
-async function loginPlayer(profile: typeof AUTHORIZED_PROFILE) {
-  currentProfile = profile;
+async function attemptLogin(referer: string) {
   stubGoogleFetch();
 
-  const startRes = await app.request("/api/v1/auth/google");
+  const startRes = await app.request("/api/v1/auth/google", { headers: { referer } });
   const cookie = startRes.headers.get("set-cookie") ?? "";
   const state = extractState(startRes.headers.get("location") ?? "");
 
-  const res = await app.request(`/api/v1/auth/google/callback?code=fake-code&state=${state}`, {
+  return app.request(`/api/v1/auth/google/callback?code=fake-code&state=${state}`, {
     headers: { cookie },
   });
+}
 
-  return (await res.json()) as LoginResponse;
+// 先登入一次(必然被擋,因為還沒有任何 app 的權限)拿到 playerId,granting 之後的規則,
+// 再登入一次拿到真正的 token——跟 auth/admin module 的 e2e 測試同一套模式(ADR-0006)。
+async function loginPlayer(profile: typeof AUTHORIZED_PROFILE, referer: string, rule: string) {
+  currentProfile = profile;
+
+  const first = await attemptLogin(referer);
+  const { playerId } = (await first.json()) as ForbiddenLoginResponse;
+  await grantAccess(playerId, rule);
+
+  const res = await attemptLogin(referer);
+  const location = res.headers.get("location") ?? "";
+  const params = new URL(location).searchParams;
+
+  return { accessToken: params.get("accessToken") ?? "", playerId };
 }
 
 interface CatResponse {
@@ -76,11 +93,12 @@ describe("cat-care routes", () => {
   let unauthorizedToken: string;
 
   beforeAll(async () => {
-    const owner = await loginPlayer(AUTHORIZED_PROFILE);
-    await grantAccess(owner.player.id, "catCare.access");
+    const owner = await loginPlayer(AUTHORIZED_PROFILE, CAT_CARE_REFERER, "catCare.access");
     authorizedToken = owner.accessToken;
 
-    const noAccess = await loginPlayer(UNAUTHORIZED_PROFILE);
+    // 登入的是完全不同的 app(otherApp),拿到的是有效 token,但沒有 catCare.access——
+    // 用來測 cat-care 自己的 canPlayer 檢查,不是測登入本身的 app 權限檢查(那是 auth 的責任)
+    const noAccess = await loginPlayer(UNAUTHORIZED_PROFILE, OTHER_APP_REFERER, "otherApp.access");
     unauthorizedToken = noAccess.accessToken;
   });
 
@@ -145,8 +163,7 @@ describe("cat-care routes", () => {
       name: "Other Player",
       picture: "https://example.com/avatar.png",
     };
-    const other = await loginPlayer(otherProfile);
-    await grantAccess(other.player.id, "catCare.access");
+    const other = await loginPlayer(otherProfile, CAT_CARE_REFERER, "catCare.access");
 
     const res = await app.request(`/api/v1/cat-care/cats/${cat.id}`, {
       headers: { authorization: `Bearer ${other.accessToken}` },
