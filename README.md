@@ -34,7 +34,7 @@ API 最前面一定會先過 Zod 這一關。不管是前端(React、Next.js、F
 
 `auth` 裡的 `users` 表是整個架構的核心。使用者註冊之後拿到的 user ID,就是全域通用的憑證。其他專案(像 `cat-care` 的貓咪資料表、`weather` 的通知設定表)在設計資料表的時候,都會用跨 Schema 外鍵指回 `auth.users` 的 ID。這樣就能做到「一組帳號,通吃好幾個 Side Project」。
 
-(補充:`fit-track` 比較特別,因為會開放給朋友使用,帳號系統是完全獨立的,細節請看 [`docs/fit-track.md`](docs/fit-track.md)。)
+(補充:`fit-track` 比較特別,因為會開放給朋友使用,帳號系統是完全獨立的,細節請看 [`docs/services/fit-track.md`](docs/services/fit-track.md)。)
 
 ---
 
@@ -68,11 +68,12 @@ API 路徑會照功能嚴格切分,例如 `/api/v1/auth/*`、`/api/v1/cat-care/*
 
 ## 📚 各服務詳細規劃
 
-五個 Side Project 各自的目的跟功能規劃,整理在 `docs` 資料夾裡,另外還有一個管理這 5 個服務的 Admin Dashboard:
+各 Side Project 的目的跟功能規劃,整理在 `docs/services` 資料夾裡,另外還有一個管理這些服務的 Admin Dashboard:
 
-- [`docs/auth.md`](docs/auth.md)
-- [`docs/cat-care.md`](docs/cat-care.md)
-- [`docs/fit-track.md`](docs/fit-track.md)
-- [`docs/rent-sniper.md`](docs/rent-sniper.md)
-- [`docs/weather.md`](docs/weather.md)
-- [`docs/admin.md`](docs/admin.md) — 管理其他 5 個 service 的後台 app
+- [`docs/services/auth.md`](docs/services/auth.md)
+- [`docs/services/cat-care.md`](docs/services/cat-care.md)
+- [`docs/services/fit-track.md`](docs/services/fit-track.md)
+- [`docs/services/rent-sniper.md`](docs/services/rent-sniper.md)
+- [`docs/services/weather.md`](docs/services/weather.md)
+- [`docs/services/bill-split.md`](docs/services/bill-split.md)
+- [`docs/services/admin.md`](docs/services/admin.md) — 管理其他 service 的後台 app

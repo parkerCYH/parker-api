@@ -11,3 +11,7 @@ Uses the default label vocabulary (needs-triage, needs-info, ready-for-agent, re
 ### Domain docs
 
 Single-context layout — one `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+
+## Database conventions
+
+This project has a single developer (parkerCYH). Keep the DB schema stable — prefer designing tables/columns to accommodate known future needs up front rather than iterating via many small migrations. Avoid generating a new migration for every minor tweak; batch related schema changes into one migration where possible.
