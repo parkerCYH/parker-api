@@ -87,7 +87,7 @@ export async function refreshSession(rawRefreshToken: string) {
 }
 
 // 「namespace.resource.action」規則檢查:SuperAdmin 用角色名稱直接放行,其他角色逐條查 role_rules。
-export async function hasAdminRule(userId: string, rule: string): Promise<boolean> {
+export async function canUser(userId: string, rule: string): Promise<boolean> {
   const user = await repo.findUserById(userId);
   if (!user || !user.roleId) return false;
 
@@ -98,7 +98,7 @@ export async function hasAdminRule(userId: string, rule: string): Promise<boolea
 }
 
 export async function canApproveUsers(userId: string): Promise<boolean> {
-  return hasAdminRule(userId, "admin.users.approve");
+  return canUser(userId, "admin.users.approve");
 }
 
 export async function approveUser(callerId: string, targetUserId: string, roleName: string) {

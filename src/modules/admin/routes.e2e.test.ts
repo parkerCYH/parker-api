@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import app from "../../app.js";
+import * as repo from "./repository.js";
+import { db } from "../../shared/db.js";
+import { roles } from "./schema.js";
 
 const SUPER_ADMIN_PROFILE = {
   sub: `google-superadmin-${randomUUID()}`,
@@ -165,5 +168,81 @@ describe("admin routes", () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as { accessToken: string };
     expect(body.accessToken).toEqual(expect.any(String));
+  });
+
+  it("lets a SuperAdmin call the cat-care gateway route", async () => {
+    const login = (await (await loginAs(SUPER_ADMIN_PROFILE)).json()) as ApprovedResponse;
+
+    const res = await app.request("/api/v1/admin/cat-care/cats", {
+      headers: { authorization: `Bearer ${login.accessToken}` },
+    });
+
+    expect(res.status).toBe(200);
+    expect(Array.isArray(await res.json())).toBe(true);
+  });
+
+  it("lets a Viewer call the cat-care gateway route (admin.catCare.viewAll seeded on Viewer)", async () => {
+    const viewerApplicant = {
+      sub: `google-viewer-${randomUUID()}`,
+      email: `viewer-${randomUUID()}@example.com`,
+      name: "Viewer User",
+      picture: "https://example.com/avatar.png",
+    };
+    const applicantLogin = (await (await loginAs(viewerApplicant)).json()) as PendingResponse;
+    const superAdminLogin = (await (await loginAs(SUPER_ADMIN_PROFILE)).json()) as ApprovedResponse;
+
+    await app.request(`/api/v1/admin/users/${applicantLogin.userId}/approve`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${superAdminLogin.accessToken}`,
+      },
+      body: JSON.stringify({ roleName: "Viewer" }),
+    });
+
+    const viewerLogin = (await (await loginAs(viewerApplicant)).json()) as ApprovedResponse;
+
+    const res = await app.request("/api/v1/admin/cat-care/cats", {
+      headers: { authorization: `Bearer ${viewerLogin.accessToken}` },
+    });
+
+    expect(res.status).toBe(200);
+  });
+
+  it("forbids an approved User whose Role lacks admin.catCare.viewAll", async () => {
+    // Viewer 現在的規則裡有 admin.catCare.viewAll,production 的兩個角色都能看,所以這裡建一個
+    // 只在測試裡存在、沒有任何規則的臨時角色,證明 canUser 真的逐條查 role_rules、不是永遠放行。
+    const [noRulesRole] = await db
+      .insert(roles)
+      .values({ name: `NoRules-${randomUUID()}` })
+      .returning();
+
+    const noRulesApplicant = {
+      sub: `google-norules-${randomUUID()}`,
+      email: `norules-${randomUUID()}@example.com`,
+      name: "No Rules User",
+      picture: "https://example.com/avatar.png",
+    };
+    const applicantLogin = (await (await loginAs(noRulesApplicant)).json()) as PendingResponse;
+    const superAdminLogin = (await (await loginAs(SUPER_ADMIN_PROFILE)).json()) as ApprovedResponse;
+
+    await repo.updateUserRole(applicantLogin.userId, {
+      roleId: noRulesRole.id,
+      approvedBy: superAdminLogin.user.id,
+      approvedAt: new Date(),
+    });
+
+    const noRulesLogin = (await (await loginAs(noRulesApplicant)).json()) as ApprovedResponse;
+
+    const res = await app.request("/api/v1/admin/cat-care/cats", {
+      headers: { authorization: `Bearer ${noRulesLogin.accessToken}` },
+    });
+
+    expect(res.status).toBe(403);
+  });
+
+  it("rejects the gateway route without a caller access token", async () => {
+    const res = await app.request("/api/v1/admin/cat-care/cats");
+    expect(res.status).toBe(401);
   });
 });
