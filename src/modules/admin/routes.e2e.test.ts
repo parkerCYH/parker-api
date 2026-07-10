@@ -712,6 +712,37 @@ describe("admin routes", () => {
     expect(detail.archivedAt).toBeTruthy();
   });
 
+  it("surfaces chipPlayerId via the gateway list and detail routes (ticket #25)", async () => {
+    const owner = (await (await loginAs(OWNER_PROFILE)).json()) as ApprovedResponse;
+    const adminAuthHeader = { authorization: `Bearer ${owner.accessToken}` };
+
+    const player = await loginPlayerWithCatCareAccess();
+    const playerAuthHeader = { authorization: `Bearer ${player.accessToken}` };
+
+    const createCatRes = await app.request("/api/v1/cat-care/cats", {
+      method: "POST",
+      headers: { "content-type": "application/json", ...playerAuthHeader },
+      body: JSON.stringify({ name: "Chip Player Gateway Cat" }),
+    });
+    const cat = (await createCatRes.json()) as { id: string };
+
+    await app.request(`/api/v1/cat-care/cats/${cat.id}/chip-player`, {
+      method: "PUT",
+      headers: { "content-type": "application/json", ...playerAuthHeader },
+      body: JSON.stringify({ email: player.profile.email }),
+    });
+
+    const listRes = await app.request("/api/v1/admin/cat-care/cats", { headers: adminAuthHeader });
+    const cats = (await listRes.json()) as Array<{ id: string; chipPlayerId?: string | null }>;
+    expect(cats.find((c) => c.id === cat.id)?.chipPlayerId).toBeTruthy();
+
+    const detailRes = await app.request(`/api/v1/admin/cat-care/cats/${cat.id}`, {
+      headers: adminAuthHeader,
+    });
+    const detail = (await detailRes.json()) as { chipPlayerId?: string | null };
+    expect(detail.chipPlayerId).toBeTruthy();
+  });
+
   it("404s the cat detail/records gateway routes for a nonexistent cat", async () => {
     const owner = (await (await loginAs(OWNER_PROFILE)).json()) as ApprovedResponse;
     const authHeader = { authorization: `Bearer ${owner.accessToken}` };

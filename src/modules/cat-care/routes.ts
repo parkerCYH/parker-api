@@ -17,6 +17,7 @@ const catSchema = z.object({
   birthdate: z.string().nullable().optional(),
   notes: z.string().nullable().optional(),
   archivedAt: z.string().nullable().optional(),
+  chipPlayerId: z.string().uuid().nullable().optional(),
   createdAt: z.string(),
 });
 
@@ -360,6 +361,40 @@ catCareRoutes.openapi(updateBowelMovementRoute, async (c) => {
   return c.json(result.record, 200);
 });
 
+const deleteBowelMovementRoute = createRoute({
+  method: "delete",
+  path: "/cats/{catId}/bowel-movements/{id}",
+  tags: ["cat-care"],
+  summary: "Hard-delete a bowel movement record (only the recording Player may delete)",
+  request: { params: catRecordParamSchema },
+  responses: {
+    204: { description: "Deleted" },
+    401: {
+      description: "Missing or invalid access token",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    403: {
+      description: "Player lacks catCare.access, or is not the original recorder",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    404: {
+      description: "Record not found for this cat",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+  },
+});
+
+catCareRoutes.openapi(deleteBowelMovementRoute, async (c) => {
+  const auth = await authenticatePlayer(c);
+  if (!auth.ok) return c.json({ error: auth.error }, auth.status);
+
+  const { catId, id } = c.req.valid("param");
+  const result = await service.deleteBowelMovement(catId, id, auth.playerId);
+  if (result.kind === "not_found") return c.json({ error: "not_found" }, 404);
+  if (result.kind === "forbidden") return c.json({ error: "forbidden" }, 403);
+  return c.body(null, 204);
+});
+
 const createWeightRecordRoute = createRoute({
   method: "post",
   path: "/cats/{catId}/weight-records",
@@ -498,6 +533,79 @@ catCareRoutes.openapi(updateWeightRecordRoute, async (c) => {
   if (result.kind === "not_found") return c.json({ error: "not_found" }, 404);
   if (result.kind === "forbidden") return c.json({ error: "forbidden" }, 403);
   return c.json(result.record, 200);
+});
+
+const deleteWeightRecordRoute = createRoute({
+  method: "delete",
+  path: "/cats/{catId}/weight-records/{id}",
+  tags: ["cat-care"],
+  summary: "Hard-delete a weight record (only the measuring Player may delete)",
+  request: { params: catRecordParamSchema },
+  responses: {
+    204: { description: "Deleted" },
+    401: {
+      description: "Missing or invalid access token",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    403: {
+      description: "Player lacks catCare.access, or is not the original measurer",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    404: {
+      description: "Record not found for this cat",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+  },
+});
+
+catCareRoutes.openapi(deleteWeightRecordRoute, async (c) => {
+  const auth = await authenticatePlayer(c);
+  if (!auth.ok) return c.json({ error: auth.error }, auth.status);
+
+  const { catId, id } = c.req.valid("param");
+  const result = await service.deleteWeightRecord(catId, id, auth.playerId);
+  if (result.kind === "not_found") return c.json({ error: "not_found" }, 404);
+  if (result.kind === "forbidden") return c.json({ error: "forbidden" }, 403);
+  return c.body(null, 204);
+});
+
+const listCatPlayersRoute = createRoute({
+  method: "get",
+  path: "/cats/{catId}/players",
+  tags: ["cat-care"],
+  summary: "List the Players (co-caretakers) currently on a cat (caller must be a member)",
+  request: { params: catIdParamSchema },
+  responses: {
+    200: {
+      description: "Members",
+      content: { "application/json": { schema: z.array(invitedPlayerSchema) } },
+    },
+    401: {
+      description: "Missing or invalid access token",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    403: {
+      description: "Player lacks catCare.access",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    404: {
+      description: "Cat not found or caller is not a member",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+  },
+});
+
+catCareRoutes.openapi(listCatPlayersRoute, async (c) => {
+  const auth = await authenticatePlayer(c);
+  if (!auth.ok) return c.json({ error: auth.error }, auth.status);
+
+  const { catId } = c.req.valid("param");
+  if (!(await service.isCatMember(catId, auth.playerId))) {
+    return c.json({ error: "not_found" }, 404);
+  }
+
+  const players = await service.listCatPlayers(catId);
+  return c.json(players, 200);
 });
 
 const invitePlayerRoute = createRoute({

@@ -29,7 +29,7 @@ export async function isCatMember(catId: string, playerId: string): Promise<bool
   return Boolean(row);
 }
 
-// Player app 用:預設排除已封存的貓咪(ticket #23)。
+// Player app 用:預設排除已封存的貓咪(ticket #23),回應帶 chipPlayerId(ticket #25)。
 export async function listCatsForPlayer(playerId: string) {
   return db
     .select({
@@ -37,6 +37,7 @@ export async function listCatsForPlayer(playerId: string) {
       name: cats.name,
       birthdate: cats.birthdate,
       notes: cats.notes,
+      chipPlayerId: cats.chipPlayerId,
       createdAt: cats.createdAt,
     })
     .from(cats)
@@ -44,7 +45,7 @@ export async function listCatsForPlayer(playerId: string) {
     .where(and(eq(catPlayers.playerId, playerId), isNull(cats.archivedAt)));
 }
 
-// admin gateway 用(ticket #23):不過濾已封存,回應多帶 archivedAt。
+// admin gateway 用(ticket #23):不過濾已封存,回應多帶 archivedAt、chipPlayerId(ticket #25)。
 export async function listAllCatsForPlayer(playerId: string) {
   return db
     .select({
@@ -53,6 +54,7 @@ export async function listAllCatsForPlayer(playerId: string) {
       birthdate: cats.birthdate,
       notes: cats.notes,
       archivedAt: cats.archivedAt,
+      chipPlayerId: cats.chipPlayerId,
       createdAt: cats.createdAt,
     })
     .from(cats)
@@ -60,7 +62,7 @@ export async function listAllCatsForPlayer(playerId: string) {
     .where(eq(catPlayers.playerId, playerId));
 }
 
-// Player app 的單一貓咪詳情用:已封存視同不存在(ticket #23)。
+// Player app 的單一貓咪詳情用:已封存視同不存在(ticket #23),回應帶 chipPlayerId(ticket #25)。
 export async function findActiveCatById(catId: string) {
   const [cat] = await db
     .select({
@@ -68,6 +70,7 @@ export async function findActiveCatById(catId: string) {
       name: cats.name,
       birthdate: cats.birthdate,
       notes: cats.notes,
+      chipPlayerId: cats.chipPlayerId,
       createdAt: cats.createdAt,
     })
     .from(cats)
@@ -103,6 +106,12 @@ export async function removeCatPlayer(catId: string, playerId: string): Promise<
 export async function countCatPlayers(catId: string): Promise<number> {
   const rows = await db.select({ playerId: catPlayers.playerId }).from(catPlayers).where(eq(catPlayers.catId, catId));
   return rows.length;
+}
+
+// GET /cats/{catId}/players 用(ticket #25):單一貓咪目前的成員 player id 清單。
+export async function listCatPlayerIds(catId: string): Promise<string[]> {
+  const rows = await db.select({ playerId: catPlayers.playerId }).from(catPlayers).where(eq(catPlayers.catId, catId));
+  return rows.map((row) => row.playerId);
 }
 
 // 設定/轉移晶片登記責任人(ticket #24)——呼叫端負責先確認目標是 cat_players 成員。
@@ -153,6 +162,11 @@ export async function updateBowelMovement(
   return row;
 }
 
+// DELETE /cats/{catId}/bowel-movements/{id}(ticket #25):hard delete,單筆紀錄打錯直接刪。
+export async function deleteBowelMovement(id: string): Promise<void> {
+  await db.delete(bowelMovements).where(eq(bowelMovements.id, id));
+}
+
 export async function createWeightRecord(input: {
   catId: string;
   measuredBy: string;
@@ -191,6 +205,11 @@ export async function updateWeightRecord(
   return row;
 }
 
+// DELETE /cats/{catId}/weight-records/{id}(ticket #25):hard delete,單筆紀錄打錯直接刪。
+export async function deleteWeightRecord(id: string): Promise<void> {
+  await db.delete(weightRecords).where(eq(weightRecords.id, id));
+}
+
 // 給 admin module 用(ticket #20):cat_players 裡出現過的所有 Player id(不重複)。
 export async function listDistinctCatPlayerIds(): Promise<string[]> {
   const rows = await db.selectDistinct({ playerId: catPlayers.playerId }).from(catPlayers);
@@ -198,7 +217,7 @@ export async function listDistinctCatPlayerIds(): Promise<string[]> {
 }
 
 // 給 admin module 用(ADR-0005):跨 Player 的全部貓咪清單,不做 membership 過濾。
-// 已封存的貓咪也包含在內,多帶 archivedAt(ticket #23)。
+// 已封存的貓咪也包含在內,多帶 archivedAt(ticket #23)、chipPlayerId(ticket #25)。
 export async function listAllCats() {
   return db
     .select({
@@ -207,6 +226,7 @@ export async function listAllCats() {
       birthdate: cats.birthdate,
       notes: cats.notes,
       archivedAt: cats.archivedAt,
+      chipPlayerId: cats.chipPlayerId,
       createdAt: cats.createdAt,
     })
     .from(cats);

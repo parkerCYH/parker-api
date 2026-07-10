@@ -456,6 +456,7 @@ const catCareCatSchema = z.object({
   birthdate: z.string().nullable().optional(),
   notes: z.string().nullable().optional(),
   archivedAt: z.string().nullable().optional(),
+  chipPlayerId: z.string().uuid().nullable().optional(),
   createdAt: z.string(),
 });
 

@@ -1,4 +1,4 @@
-import { canPlayer, getPlayerByEmail, listPlayersWithAccess } from "../auth/index.js";
+import { canPlayer, getPlayerByEmail, getPlayerProfile, listPlayersWithAccess } from "../auth/index.js";
 import * as repo from "./repository.js";
 
 export async function createCat(
@@ -80,6 +80,14 @@ export async function setChipPlayer(catId: string, email: string): Promise<ChipT
   return { kind: "ok", cat };
 }
 
+// GET /cats/{catId}/players(ticket #25):讀出一隻貓目前的 cat_players 成員名單,
+// 補上 #24 只做寫入(邀請/退出/轉移)沒做的對應讀取。
+export async function listCatPlayers(catId: string) {
+  const playerIds = await repo.listCatPlayerIds(catId);
+  const profiles = await Promise.all(playerIds.map((playerId) => getPlayerProfile(playerId)));
+  return profiles.filter((profile): profile is NonNullable<typeof profile> => Boolean(profile));
+}
+
 export async function recordBowelMovement(
   catId: string,
   playerId: string,
@@ -128,6 +136,22 @@ export async function updateBowelMovement(
   return { kind: "ok", record: updated };
 }
 
+export type DeleteResult = { kind: "ok" } | { kind: "not_found" } | { kind: "forbidden" };
+
+// DELETE /cats/{catId}/bowel-movements/{id}(ticket #25):hard delete,限 recorded_by 本人。
+export async function deleteBowelMovement(
+  catId: string,
+  recordId: string,
+  playerId: string,
+): Promise<DeleteResult> {
+  const record = await repo.findBowelMovementById(recordId);
+  if (!record || record.catId !== catId) return { kind: "not_found" };
+  if (record.recordedBy !== playerId) return { kind: "forbidden" };
+
+  await repo.deleteBowelMovement(recordId);
+  return { kind: "ok" };
+}
+
 export async function recordWeight(
   catId: string,
   playerId: string,
@@ -169,6 +193,20 @@ export async function updateWeightRecord(
     ...(input.notes !== undefined ? { notes: input.notes } : {}),
   });
   return { kind: "ok", record: updated };
+}
+
+// DELETE /cats/{catId}/weight-records/{id}(ticket #25):hard delete,限 measured_by 本人。
+export async function deleteWeightRecord(
+  catId: string,
+  recordId: string,
+  playerId: string,
+): Promise<DeleteResult> {
+  const record = await repo.findWeightRecordById(recordId);
+  if (!record || record.catId !== catId) return { kind: "not_found" };
+  if (record.measuredBy !== playerId) return { kind: "forbidden" };
+
+  await repo.deleteWeightRecord(recordId);
+  return { kind: "ok" };
 }
 
 // 給 admin module 當 gateway 呼叫(見 ticket #14、ADR-0005),cat-care 自己不開對外端點。

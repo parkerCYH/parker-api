@@ -725,4 +725,193 @@ describe("cat-care routes", () => {
     expect(weightRecords.some((r) => r.weightGrams === 4100)).toBe(true);
     expect(weightRecords.some((r) => r.weightGrams === 4000)).toBe(false);
   });
+
+  it("lists cat_players members, and 404s for a non-member (ticket #25)", async () => {
+    const createRes = await app.request("/api/v1/cat-care/cats", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${authorizedToken}`,
+      },
+      body: JSON.stringify({ name: "Members List Cat" }),
+    });
+    const cat = (await createRes.json()) as CatResponse;
+
+    const coCaretaker = await newCatCarePlayer("co-caretaker");
+    await app.request(`/api/v1/cat-care/cats/${cat.id}/players`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${authorizedToken}`,
+      },
+      body: JSON.stringify({ email: coCaretaker.profile.email }),
+    });
+
+    const listRes = await app.request(`/api/v1/cat-care/cats/${cat.id}/players`, {
+      headers: { authorization: `Bearer ${authorizedToken}` },
+    });
+    expect(listRes.status).toBe(200);
+    const members = (await listRes.json()) as Array<{ id: string; email: string }>;
+    expect(members.some((m) => m.email === AUTHORIZED_PROFILE.email)).toBe(true);
+    expect(members.some((m) => m.email === coCaretaker.profile.email)).toBe(true);
+
+    const outsider = await newCatCarePlayer("members-outsider");
+    const forbiddenRes = await app.request(`/api/v1/cat-care/cats/${cat.id}/players`, {
+      headers: { authorization: `Bearer ${outsider.accessToken}` },
+    });
+    expect(forbiddenRes.status).toBe(404);
+  });
+
+  it("returns chipPlayerId in GET /cats and GET /cats/{catId} before and after it's set (ticket #25)", async () => {
+    const createRes = await app.request("/api/v1/cat-care/cats", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${authorizedToken}`,
+      },
+      body: JSON.stringify({ name: "Chip Field Visibility Cat" }),
+    });
+    const cat = (await createRes.json()) as CatResponse;
+    expect(cat.chipPlayerId ?? null).toBeNull();
+
+    const getBeforeRes = await app.request(`/api/v1/cat-care/cats/${cat.id}`, {
+      headers: { authorization: `Bearer ${authorizedToken}` },
+    });
+    const beforeCat = (await getBeforeRes.json()) as CatResponse;
+    expect(beforeCat.chipPlayerId ?? null).toBeNull();
+
+    const listBeforeRes = await app.request("/api/v1/cat-care/cats", {
+      headers: { authorization: `Bearer ${authorizedToken}` },
+    });
+    const listBefore = (await listBeforeRes.json()) as CatResponse[];
+    expect(listBefore.find((c) => c.id === cat.id)?.chipPlayerId ?? null).toBeNull();
+
+    await app.request(`/api/v1/cat-care/cats/${cat.id}/chip-player`, {
+      method: "PUT",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${authorizedToken}`,
+      },
+      body: JSON.stringify({ email: AUTHORIZED_PROFILE.email }),
+    });
+
+    const getAfterRes = await app.request(`/api/v1/cat-care/cats/${cat.id}`, {
+      headers: { authorization: `Bearer ${authorizedToken}` },
+    });
+    const afterCat = (await getAfterRes.json()) as CatResponse;
+    expect(afterCat.chipPlayerId).toBeTruthy();
+
+    const listAfterRes = await app.request("/api/v1/cat-care/cats", {
+      headers: { authorization: `Bearer ${authorizedToken}` },
+    });
+    const listAfter = (await listAfterRes.json()) as CatResponse[];
+    expect(listAfter.find((c) => c.id === cat.id)?.chipPlayerId).toBeTruthy();
+  });
+
+  it("lets only the recording Player hard-delete a bowel movement (ticket #25)", async () => {
+    const createRes = await app.request("/api/v1/cat-care/cats", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${authorizedToken}`,
+      },
+      body: JSON.stringify({ name: "Bowel Delete Test Cat" }),
+    });
+    const cat = (await createRes.json()) as CatResponse;
+
+    const recordRes = await app.request(`/api/v1/cat-care/cats/${cat.id}/bowel-movements`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${authorizedToken}`,
+      },
+      body: JSON.stringify({ stoolType: "to be deleted" }),
+    });
+    const record = (await recordRes.json()) as { id: string };
+
+    const otherMember = await newCatCarePlayer("bowel-delete-other");
+    await app.request(`/api/v1/cat-care/cats/${cat.id}/players`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${authorizedToken}`,
+      },
+      body: JSON.stringify({ email: otherMember.profile.email }),
+    });
+
+    const forbiddenRes = await app.request(
+      `/api/v1/cat-care/cats/${cat.id}/bowel-movements/${record.id}`,
+      { method: "DELETE", headers: { authorization: `Bearer ${otherMember.accessToken}` } },
+    );
+    expect(forbiddenRes.status).toBe(403);
+
+    const deleteRes = await app.request(
+      `/api/v1/cat-care/cats/${cat.id}/bowel-movements/${record.id}`,
+      { method: "DELETE", headers: { authorization: `Bearer ${authorizedToken}` } },
+    );
+    expect(deleteRes.status).toBe(204);
+
+    const listRes = await app.request(`/api/v1/cat-care/cats/${cat.id}/bowel-movements`, {
+      headers: { authorization: `Bearer ${authorizedToken}` },
+    });
+    const records = (await listRes.json()) as Array<{ id: string }>;
+    expect(records.some((r) => r.id === record.id)).toBe(false);
+
+    // 已刪除,再刪一次回 404
+    const secondDeleteRes = await app.request(
+      `/api/v1/cat-care/cats/${cat.id}/bowel-movements/${record.id}`,
+      { method: "DELETE", headers: { authorization: `Bearer ${authorizedToken}` } },
+    );
+    expect(secondDeleteRes.status).toBe(404);
+  });
+
+  it("lets only the measuring Player hard-delete a weight record (ticket #25)", async () => {
+    const createRes = await app.request("/api/v1/cat-care/cats", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${authorizedToken}`,
+      },
+      body: JSON.stringify({ name: "Weight Delete Test Cat" }),
+    });
+    const cat = (await createRes.json()) as CatResponse;
+
+    const recordRes = await app.request(`/api/v1/cat-care/cats/${cat.id}/weight-records`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${authorizedToken}`,
+      },
+      body: JSON.stringify({ weightGrams: 4321 }),
+    });
+    const record = (await recordRes.json()) as { id: string };
+
+    const otherMember = await newCatCarePlayer("weight-delete-other");
+    await app.request(`/api/v1/cat-care/cats/${cat.id}/players`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${authorizedToken}`,
+      },
+      body: JSON.stringify({ email: otherMember.profile.email }),
+    });
+
+    const forbiddenRes = await app.request(
+      `/api/v1/cat-care/cats/${cat.id}/weight-records/${record.id}`,
+      { method: "DELETE", headers: { authorization: `Bearer ${otherMember.accessToken}` } },
+    );
+    expect(forbiddenRes.status).toBe(403);
+
+    const deleteRes = await app.request(
+      `/api/v1/cat-care/cats/${cat.id}/weight-records/${record.id}`,
+      { method: "DELETE", headers: { authorization: `Bearer ${authorizedToken}` } },
+    );
+    expect(deleteRes.status).toBe(204);
+
+    const listRes = await app.request(`/api/v1/cat-care/cats/${cat.id}/weight-records`, {
+      headers: { authorization: `Bearer ${authorizedToken}` },
+    });
+    const records = (await listRes.json()) as Array<{ id: string }>;
+    expect(records.some((r) => r.id === record.id)).toBe(false);
+  });
 });
