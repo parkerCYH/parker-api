@@ -8,7 +8,15 @@ import {
   listCatCarePlayers,
   listWeightRecords,
 } from "../cat-care/index.js";
-import { addRuleToRole, createRole, deleteRole, listRoles, removeRuleFromRole } from "../rbac/index.js";
+import {
+  addRuleToRole,
+  createRole,
+  deleteRole,
+  KNOWN_RULES,
+  listRoles,
+  listRulesForRole,
+  removeRuleFromRole,
+} from "../rbac/index.js";
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import type { Context } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
@@ -865,6 +873,72 @@ adminRoutes.openapi(removeRuleRoute, async (c) => {
   const { roleId, rule } = c.req.valid("param");
   await removeRuleFromRole(roleId, rule);
   return c.body(null, 204);
+});
+
+// ticket #21:查詢用的兩支,讓 Owner 在管理介面能看到「這個 Role 現在有哪些規則」跟「系統裡
+// 全部可用規則」,不用手動打字。都沿用 rbac.roles.manage,跟建立/刪除 Role/Rule 是同一種能力。
+const listRulesForRoleRoute = createRoute({
+  method: "get",
+  path: "/roles/{roleId}/rules",
+  tags: ["admin"],
+  summary: "List the rules a Role currently has (requires rbac.roles.manage)",
+  request: { params: z.object({ roleId: z.string().uuid() }) },
+  responses: {
+    200: {
+      description: "Rules",
+      content: { "application/json": { schema: z.array(z.string()) } },
+    },
+    401: {
+      description: "Missing or invalid caller access token",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    403: {
+      description: "Caller lacks rbac.roles.manage",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+  },
+});
+
+adminRoutes.openapi(listRulesForRoleRoute, async (c) => {
+  const guard = await requireRoleManager(c);
+  if (!guard.ok) return c.json({ error: guard.error }, guard.status);
+
+  const { roleId } = c.req.valid("param");
+  const rules = await listRulesForRole(roleId);
+  return c.json(rules, 200);
+});
+
+const knownRuleSchema = z.object({
+  rule: z.string(),
+  description: z.string(),
+});
+
+const listKnownRulesRoute = createRoute({
+  method: "get",
+  path: "/rules",
+  tags: ["admin"],
+  summary: "List the KNOWN_RULES catalog of every grantable rule (requires rbac.roles.manage)",
+  responses: {
+    200: {
+      description: "Known rules",
+      content: { "application/json": { schema: z.array(knownRuleSchema) } },
+    },
+    401: {
+      description: "Missing or invalid caller access token",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    403: {
+      description: "Caller lacks rbac.roles.manage",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+  },
+});
+
+adminRoutes.openapi(listKnownRulesRoute, async (c) => {
+  const guard = await requireRoleManager(c);
+  if (!guard.ok) return c.json({ error: guard.error }, guard.status);
+
+  return c.json(KNOWN_RULES, 200);
 });
 
 // 邀請白名單(ADR-0001 的 Whitelist 段落):只有握有 admin.whitelist.manage 的人(即 Owner)

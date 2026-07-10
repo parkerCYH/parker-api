@@ -722,4 +722,48 @@ describe("admin routes", () => {
       expect(res.status).toBe(403);
     }
   });
+
+  it("lets an Owner query a Role's current rules and the KNOWN_RULES catalog (ticket #21)", async () => {
+    const owner = (await (await loginAs(OWNER_PROFILE)).json()) as ApprovedResponse;
+    const authHeader = { authorization: `Bearer ${owner.accessToken}` };
+
+    const role = await createRole(`Rule-Query-${randomUUID()}`);
+    await app.request(`/api/v1/admin/roles/${role.id}/rules`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...authHeader },
+      body: JSON.stringify({ rule: "some.query.rule" }),
+    });
+
+    const roleRulesRes = await app.request(`/api/v1/admin/roles/${role.id}/rules`, { headers: authHeader });
+    expect(roleRulesRes.status).toBe(200);
+    const roleRules = (await roleRulesRes.json()) as string[];
+    expect(roleRules).toContain("some.query.rule");
+
+    const knownRulesRes = await app.request("/api/v1/admin/rules", { headers: authHeader });
+    expect(knownRulesRes.status).toBe(200);
+    const knownRules = (await knownRulesRes.json()) as Array<{ rule: string; description: string }>;
+    expect(knownRules.some((r) => r.rule === "admin.catCare.viewAll")).toBe(true);
+    expect(knownRules.every((r) => typeof r.description === "string" && r.description.length > 0)).toBe(
+      true,
+    );
+  });
+
+  it("forbids a SuperAdmin (no rbac.roles.manage) from querying rules", async () => {
+    const superAdminProfile = {
+      sub: `google-superadmin-rules-${randomUUID()}`,
+      email: `superadmin-rules-${randomUUID()}@example.com`,
+      name: "SuperAdmin for rule query test",
+      picture: "https://example.com/avatar.png",
+    };
+    const superAdmin = await loginWithRole(superAdminProfile, "SuperAdmin");
+    const authHeader = { authorization: `Bearer ${superAdmin.accessToken}` };
+
+    const role = await createRole(`Rule-Query-Forbidden-${randomUUID()}`);
+
+    const roleRulesRes = await app.request(`/api/v1/admin/roles/${role.id}/rules`, { headers: authHeader });
+    expect(roleRulesRes.status).toBe(403);
+
+    const knownRulesRes = await app.request("/api/v1/admin/rules", { headers: authHeader });
+    expect(knownRulesRes.status).toBe(403);
+  });
 });

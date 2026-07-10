@@ -3,7 +3,8 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     environment: "node",
-    include: ["src/**/*.e2e.test.ts"],
+    // *.scan.test.ts:ADR-0004 的例外——原始碼靜態掃描,不是 e2e,不打 Postgres。
+    include: ["src/**/*.e2e.test.ts", "src/**/*.scan.test.ts"],
     passWithNoTests: true,
     env: {
       DATABASE_URL:

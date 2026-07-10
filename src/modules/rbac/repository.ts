@@ -34,3 +34,8 @@ export async function roleHasRule(roleId: string, rule: string): Promise<boolean
     .limit(1);
   return Boolean(row);
 }
+
+export async function listRulesForRole(roleId: string): Promise<string[]> {
+  const rows = await db.select({ rule: roleRules.rule }).from(roleRules).where(eq(roleRules.roleId, roleId));
+  return rows.map((row) => row.rule);
+}
