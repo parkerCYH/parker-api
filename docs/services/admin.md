@@ -7,6 +7,7 @@
 ## 帳號與權限設計
 
 - User 透過 `auth` 的 Google OAuth 登入,但不會像 Player 一樣登入即自動建立帳號 —— 採「申請 → 待審核 → 既有 User 核准」的流程,詳見 [`docs/adr/0001-user-registration-approval-flow.md`](../adr/0001-user-registration-approval-flow.md)
+- 登入完成後導回 Admin Dashboard(獨立網域的 Next.js app),不直接把 token 放進 URL——核准的情境用一次性 exchange code,前端後端再拿 code 換 token(POST,不進 URL);待審核的情境直接帶 `status=pending&userId` 導回(不是憑證,沒有額外風險)。詳見 [`docs/adr/0008-admin-login-exchange-code-redirect.md`](../adr/0008-admin-login-exchange-code-redirect.md)
 - 第一個 User 由 `SUPER_ADMIN_EMAILS` 環境變數指定,略過審核直接生效,解決系統剛啟動時「沒有既有 User 可以核准」的問題
 - **白名單**:只有握有 `admin.whitelist.manage` 規則的 Role(即 Owner)可以管理一份 `admin.invite_whitelist`(email + 預先指定的 Role),命中白名單的申請登入時直接自動核准,不用等手動逐一審核。`SUPER_ADMIN_EMAILS` bootstrap 進來的 User 指派的就是 Owner。詳見 ADR-0001 的 Whitelist 段落
 - User RBAC 跟 Player RBAC 是兩套獨立規則表,共用 `namespace.resource.action` 命名慣例(例如 `admin.fitTrack.viewPlayers`),但各自存放在不同的規則表,語意上不混用
