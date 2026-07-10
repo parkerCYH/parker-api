@@ -679,7 +679,7 @@ describe("cat-care routes", () => {
         "content-type": "application/json",
         authorization: `Bearer ${authorizedToken}`,
       },
-      body: JSON.stringify({ recordedAt: oldDate, stoolType: "old" }),
+      body: JSON.stringify({ recordedAt: oldDate, stoolType: "hard" }),
     });
     await app.request(`/api/v1/cat-care/cats/${cat.id}/bowel-movements`, {
       method: "POST",
@@ -687,7 +687,7 @@ describe("cat-care routes", () => {
         "content-type": "application/json",
         authorization: `Bearer ${authorizedToken}`,
       },
-      body: JSON.stringify({ recordedAt: recentDate, stoolType: "recent" }),
+      body: JSON.stringify({ recordedAt: recentDate, stoolType: "watery" }),
     });
 
     await app.request(`/api/v1/cat-care/cats/${cat.id}/weight-records`, {
@@ -713,8 +713,8 @@ describe("cat-care routes", () => {
     );
     expect(bowelRes.status).toBe(200);
     const bowelRecords = (await bowelRes.json()) as Array<{ stoolType: string }>;
-    expect(bowelRecords.some((r) => r.stoolType === "recent")).toBe(true);
-    expect(bowelRecords.some((r) => r.stoolType === "old")).toBe(false);
+    expect(bowelRecords.some((r) => r.stoolType === "watery")).toBe(true);
+    expect(bowelRecords.some((r) => r.stoolType === "hard")).toBe(false);
 
     const weightRes = await app.request(
       `/api/v1/cat-care/cats/${cat.id}/weight-records?from=2025-01-01&to=2026-12-31`,
@@ -825,7 +825,7 @@ describe("cat-care routes", () => {
         "content-type": "application/json",
         authorization: `Bearer ${authorizedToken}`,
       },
-      body: JSON.stringify({ stoolType: "to be deleted" }),
+      body: JSON.stringify({ stoolType: "normal" }),
     });
     const record = (await recordRes.json()) as { id: string };
 
@@ -913,5 +913,37 @@ describe("cat-care routes", () => {
     });
     const records = (await listRes.json()) as Array<{ id: string }>;
     expect(records.some((r) => r.id === record.id)).toBe(false);
+  });
+
+  it("rejects out-of-enum stoolType and method values (ticket #27)", async () => {
+    const createRes = await app.request("/api/v1/cat-care/cats", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${authorizedToken}`,
+      },
+      body: JSON.stringify({ name: "Enum Validation Cat" }),
+    });
+    const cat = (await createRes.json()) as CatResponse;
+
+    const badStoolTypeRes = await app.request(`/api/v1/cat-care/cats/${cat.id}/bowel-movements`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${authorizedToken}`,
+      },
+      body: JSON.stringify({ stoolType: "not-a-real-type" }),
+    });
+    expect(badStoolTypeRes.status).toBe(400);
+
+    const badMethodRes = await app.request(`/api/v1/cat-care/cats/${cat.id}/weight-records`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${authorizedToken}`,
+      },
+      body: JSON.stringify({ weightGrams: 4000, method: "not-a-real-method" }),
+    });
+    expect(badMethodRes.status).toBe(400);
   });
 });

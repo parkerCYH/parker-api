@@ -3,6 +3,11 @@ import { boolean, date, integer, pgSchema, primaryKey, text, timestamp, uuid } f
 
 export const catCareSchema = pgSchema("cat_care");
 
+// DB 欄位維持 text,這兩個型別只是 Drizzle 端的編譯期標註,不是 Postgres enum/CHECK
+// constraint(ticket #27)——實際驗證在 routes.ts 的 z.enum 做。
+export type StoolType = "normal" | "hard" | "soft" | "watery" | "bloody" | "mucous";
+export type Method = "catScale" | "holdAndSubtract" | "other";
+
 // player_id/recorded_by/measured_by 都指回 auth.players.id(見 CONTEXT.md「共用帳號機制」的
 // 跨 schema 外鍵慣例),但這裡刻意不用 Drizzle 的 .references() 匯入 auth/schema.ts——
 // drizzle-kit 的 loader 不會解析跨 module 的相對路徑匯入(`.js` 對應 `.ts` 來源),而 cat-care
@@ -45,7 +50,7 @@ export const bowelMovements = catCareSchema.table("bowel_movements", {
     .references(() => cats.id, { onDelete: "cascade" }),
   recordedBy: uuid("recorded_by").notNull(),
   recordedAt: timestamp("recorded_at", { withTimezone: true }).notNull(),
-  stoolType: text("stool_type"),
+  stoolType: text("stool_type").$type<StoolType>(),
   isAbnormal: boolean("is_abnormal").notNull().default(false),
   notes: text("notes"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -61,7 +66,7 @@ export const weightRecords = catCareSchema.table("weight_records", {
   measuredBy: uuid("measured_by").notNull(),
   measuredAt: timestamp("measured_at", { withTimezone: true }).notNull(),
   weightGrams: integer("weight_grams").notNull(),
-  method: text("method"),
+  method: text("method").$type<Method>(),
   notes: text("notes"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });

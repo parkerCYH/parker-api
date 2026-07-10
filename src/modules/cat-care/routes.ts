@@ -21,12 +21,17 @@ const catSchema = z.object({
   createdAt: z.string(),
 });
 
+// DB 欄位維持 text,只在 API 層驗證(ticket #27,比照 admin module 的
+// userStatusSchema/roleNameSchema 做法),不建 Postgres enum type、不加 CHECK constraint。
+const stoolTypeSchema = z.enum(["normal", "hard", "soft", "watery", "bloody", "mucous"]);
+const methodSchema = z.enum(["catScale", "holdAndSubtract", "other"]);
+
 const bowelMovementSchema = z.object({
   id: z.string().uuid(),
   catId: z.string().uuid(),
   recordedBy: z.string().uuid(),
   recordedAt: z.string(),
-  stoolType: z.string().nullable().optional(),
+  stoolType: stoolTypeSchema.nullable().optional(),
   isAbnormal: z.boolean(),
   notes: z.string().nullable().optional(),
   createdAt: z.string(),
@@ -38,7 +43,7 @@ const weightRecordSchema = z.object({
   measuredBy: z.string().uuid(),
   measuredAt: z.string(),
   weightGrams: z.number(),
-  method: z.string().nullable().optional(),
+  method: methodSchema.nullable().optional(),
   notes: z.string().nullable().optional(),
   createdAt: z.string(),
 });
@@ -233,7 +238,7 @@ const createBowelMovementRoute = createRoute({
         "application/json": {
           schema: z.object({
             recordedAt: z.string().datetime().optional(),
-            stoolType: z.string().optional(),
+            stoolType: stoolTypeSchema.optional(),
             isAbnormal: z.boolean().optional(),
             notes: z.string().optional(),
           }),
@@ -324,7 +329,7 @@ const updateBowelMovementRoute = createRoute({
         "application/json": {
           schema: z.object({
             recordedAt: z.string().datetime().optional(),
-            stoolType: z.string().optional(),
+            stoolType: stoolTypeSchema.optional(),
             isAbnormal: z.boolean().optional(),
             notes: z.string().optional(),
           }),
@@ -408,7 +413,7 @@ const createWeightRecordRoute = createRoute({
           schema: z.object({
             measuredAt: z.string().datetime().optional(),
             weightGrams: z.number().int().positive(),
-            method: z.string().optional(),
+            method: methodSchema.optional(),
             notes: z.string().optional(),
           }),
         },
@@ -499,7 +504,7 @@ const updateWeightRecordRoute = createRoute({
           schema: z.object({
             measuredAt: z.string().datetime().optional(),
             weightGrams: z.number().int().positive().optional(),
-            method: z.string().optional(),
+            method: methodSchema.optional(),
             notes: z.string().optional(),
           }),
         },

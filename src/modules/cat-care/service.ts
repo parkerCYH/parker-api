@@ -1,5 +1,6 @@
 import { canPlayer, getPlayerByEmail, getPlayerProfile, listPlayersWithAccess } from "../auth/index.js";
 import * as repo from "./repository.js";
+import type { Method, StoolType } from "./schema.js";
 
 export async function createCat(
   playerId: string,
@@ -91,7 +92,7 @@ export async function listCatPlayers(catId: string) {
 export async function recordBowelMovement(
   catId: string,
   playerId: string,
-  input: { recordedAt?: string; stoolType?: string; isAbnormal?: boolean; notes?: string },
+  input: { recordedAt?: string; stoolType?: StoolType; isAbnormal?: boolean; notes?: string },
 ) {
   return repo.createBowelMovement({
     catId,
@@ -121,7 +122,7 @@ export async function updateBowelMovement(
   catId: string,
   recordId: string,
   playerId: string,
-  input: { recordedAt?: string; stoolType?: string; isAbnormal?: boolean; notes?: string },
+  input: { recordedAt?: string; stoolType?: StoolType; isAbnormal?: boolean; notes?: string },
 ): Promise<EditResult<Awaited<ReturnType<typeof repo.updateBowelMovement>>>> {
   const record = await repo.findBowelMovementById(recordId);
   if (!record || record.catId !== catId) return { kind: "not_found" };
@@ -155,7 +156,7 @@ export async function deleteBowelMovement(
 export async function recordWeight(
   catId: string,
   playerId: string,
-  input: { measuredAt?: string; weightGrams: number; method?: string; notes?: string },
+  input: { measuredAt?: string; weightGrams: number; method?: Method; notes?: string },
 ) {
   return repo.createWeightRecord({
     catId,
@@ -180,7 +181,7 @@ export async function updateWeightRecord(
   catId: string,
   recordId: string,
   playerId: string,
-  input: { measuredAt?: string; weightGrams?: number; method?: string; notes?: string },
+  input: { measuredAt?: string; weightGrams?: number; method?: Method; notes?: string },
 ): Promise<EditResult<Awaited<ReturnType<typeof repo.updateWeightRecord>>>> {
   const record = await repo.findWeightRecordById(recordId);
   if (!record || record.catId !== catId) return { kind: "not_found" };

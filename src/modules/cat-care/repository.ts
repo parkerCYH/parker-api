@@ -1,6 +1,7 @@
 import { and, desc, eq, gte, isNull, lte } from "drizzle-orm";
 import { db } from "../../shared/db.js";
 import { bowelMovements, catPlayers, cats, weightRecords } from "./schema.js";
+import type { Method, StoolType } from "./schema.js";
 
 export async function createCat(input: {
   name: string;
@@ -128,7 +129,7 @@ export async function createBowelMovement(input: {
   catId: string;
   recordedBy: string;
   recordedAt: Date;
-  stoolType?: string;
+  stoolType?: StoolType;
   isAbnormal?: boolean;
   notes?: string;
 }) {
@@ -156,7 +157,7 @@ export async function findBowelMovementById(id: string) {
 
 export async function updateBowelMovement(
   id: string,
-  patch: { recordedAt?: Date; stoolType?: string; isAbnormal?: boolean; notes?: string },
+  patch: { recordedAt?: Date; stoolType?: StoolType; isAbnormal?: boolean; notes?: string },
 ) {
   const [row] = await db.update(bowelMovements).set(patch).where(eq(bowelMovements.id, id)).returning();
   return row;
@@ -172,7 +173,7 @@ export async function createWeightRecord(input: {
   measuredBy: string;
   measuredAt: Date;
   weightGrams: number;
-  method?: string;
+  method?: Method;
   notes?: string;
 }) {
   const [row] = await db.insert(weightRecords).values(input).returning();
@@ -199,7 +200,7 @@ export async function findWeightRecordById(id: string) {
 
 export async function updateWeightRecord(
   id: string,
-  patch: { measuredAt?: Date; weightGrams?: number; method?: string; notes?: string },
+  patch: { measuredAt?: Date; weightGrams?: number; method?: Method; notes?: string },
 ) {
   const [row] = await db.update(weightRecords).set(patch).where(eq(weightRecords.id, id)).returning();
   return row;
