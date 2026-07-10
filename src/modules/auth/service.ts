@@ -68,3 +68,11 @@ export async function getPlayerProfile(playerId: string) {
   if (!player) return undefined;
   return toPublicPlayer(player);
 }
+
+// 給 cat-care 的邀請功能用(ticket #24):用 email 查既有帳號,找不到就代表對方還沒登入過
+// parker-api,由呼叫端決定怎麼處理(cat-care 是家庭共用工具,不做邀請碼機制)。
+export async function getPlayerByEmail(email: string) {
+  const player = await repo.findPlayerByEmail(email);
+  if (!player) return undefined;
+  return toPublicPlayer(player);
+}

@@ -42,8 +42,18 @@ const weightRecordSchema = z.object({
   createdAt: z.string(),
 });
 
+const invitedPlayerSchema = z.object({
+  id: z.string().uuid(),
+  email: z.string().email(),
+  name: z.string(),
+});
+
 const catIdParamSchema = z.object({ catId: z.string().uuid() });
 const catRecordParamSchema = z.object({ catId: z.string().uuid(), id: z.string().uuid() });
+const historyQuerySchema = z.object({
+  from: z.string().date().optional(),
+  to: z.string().date().optional(),
+});
 
 // 每個 Player route 進入點都要過這一關(ticket #13):驗證 Bearer access token,
 // 再用 auth 的 canPlayer 檢查 catCare.access。回傳結果而非 Response——讓每個 handler
@@ -265,8 +275,8 @@ const listBowelMovementsRoute = createRoute({
   method: "get",
   path: "/cats/{catId}/bowel-movements",
   tags: ["cat-care"],
-  summary: "List bowel movement history for a cat",
-  request: { params: catIdParamSchema },
+  summary: "List bowel movement history for a cat (optionally filtered by ?from=&to= date range)",
+  request: { params: catIdParamSchema, query: historyQuerySchema },
   responses: {
     200: {
       description: "History",
@@ -296,7 +306,8 @@ catCareRoutes.openapi(listBowelMovementsRoute, async (c) => {
     return c.json({ error: "not_found" }, 404);
   }
 
-  const records = await service.listBowelMovements(catId);
+  const { from, to } = c.req.valid("query");
+  const records = await service.listBowelMovements(catId, { from, to });
   return c.json(records, 200);
 });
 
@@ -404,8 +415,8 @@ const listWeightRecordsRoute = createRoute({
   method: "get",
   path: "/cats/{catId}/weight-records",
   tags: ["cat-care"],
-  summary: "List weight history for a cat",
-  request: { params: catIdParamSchema },
+  summary: "List weight history for a cat (optionally filtered by ?from=&to= date range)",
+  request: { params: catIdParamSchema, query: historyQuerySchema },
   responses: {
     200: {
       description: "History",
@@ -435,7 +446,8 @@ catCareRoutes.openapi(listWeightRecordsRoute, async (c) => {
     return c.json({ error: "not_found" }, 404);
   }
 
-  const records = await service.listWeightRecords(catId);
+  const { from, to } = c.req.valid("query");
+  const records = await service.listWeightRecords(catId, { from, to });
   return c.json(records, 200);
 });
 
@@ -486,4 +498,141 @@ catCareRoutes.openapi(updateWeightRecordRoute, async (c) => {
   if (result.kind === "not_found") return c.json({ error: "not_found" }, 404);
   if (result.kind === "forbidden") return c.json({ error: "forbidden" }, 403);
   return c.json(result.record, 200);
+});
+
+const invitePlayerRoute = createRoute({
+  method: "post",
+  path: "/cats/{catId}/players",
+  tags: ["cat-care"],
+  summary: "Invite an existing Player (by email) to join a cat (caller must be a member)",
+  request: {
+    params: catIdParamSchema,
+    body: {
+      content: {
+        "application/json": {
+          schema: z.object({ email: z.string().email() }),
+        },
+      },
+    },
+  },
+  responses: {
+    201: { description: "Joined", content: { "application/json": { schema: invitedPlayerSchema } } },
+    401: {
+      description: "Missing or invalid access token",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    403: {
+      description: "Player lacks catCare.access",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    404: {
+      description: "Cat not found, caller is not a member, or no Player exists for that email",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+  },
+});
+
+catCareRoutes.openapi(invitePlayerRoute, async (c) => {
+  const auth = await authenticatePlayer(c);
+  if (!auth.ok) return c.json({ error: auth.error }, auth.status);
+
+  const { catId } = c.req.valid("param");
+  if (!(await service.isCatMember(catId, auth.playerId))) {
+    return c.json({ error: "not_found" }, 404);
+  }
+
+  const { email } = c.req.valid("json");
+  const result = await service.invitePlayer(catId, email);
+  if (result.kind === "player_not_found") return c.json({ error: "player_not_found" }, 404);
+  return c.json(result.player, 201);
+});
+
+const leaveCatRoute = createRoute({
+  method: "delete",
+  path: "/cats/{catId}/players/me",
+  tags: ["cat-care"],
+  summary: "Leave a cat (caller only; the chip-registration custodian must transfer first)",
+  request: { params: catIdParamSchema },
+  responses: {
+    204: { description: "Left" },
+    401: {
+      description: "Missing or invalid access token",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    403: {
+      description: "Player lacks catCare.access",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    404: {
+      description: "Caller is not a member of this cat",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    409: {
+      description: "Caller is the chip-registration custodian, or leaving would orphan the cat",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+  },
+});
+
+catCareRoutes.openapi(leaveCatRoute, async (c) => {
+  const auth = await authenticatePlayer(c);
+  if (!auth.ok) return c.json({ error: auth.error }, auth.status);
+
+  const { catId } = c.req.valid("param");
+  const result = await service.leaveCat(catId, auth.playerId);
+  if (result.kind === "not_found") return c.json({ error: "not_found" }, 404);
+  if (result.kind === "conflict") return c.json({ error: result.reason }, 409);
+  return c.body(null, 204);
+});
+
+const setChipPlayerRoute = createRoute({
+  method: "put",
+  path: "/cats/{catId}/chip-player",
+  tags: ["cat-care"],
+  summary: "Set or transfer the chip-registration custodian (target must already be a member)",
+  request: {
+    params: catIdParamSchema,
+    body: {
+      content: {
+        "application/json": {
+          schema: z.object({ email: z.string().email() }),
+        },
+      },
+    },
+  },
+  responses: {
+    200: { description: "Updated", content: { "application/json": { schema: catSchema } } },
+    401: {
+      description: "Missing or invalid access token",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    403: {
+      description: "Player lacks catCare.access",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    404: {
+      description: "Cat not found, caller is not a member, or no Player exists for that email",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    409: {
+      description: "Target Player is not yet a member of this cat",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+  },
+});
+
+catCareRoutes.openapi(setChipPlayerRoute, async (c) => {
+  const auth = await authenticatePlayer(c);
+  if (!auth.ok) return c.json({ error: auth.error }, auth.status);
+
+  const { catId } = c.req.valid("param");
+  if (!(await service.isCatMember(catId, auth.playerId))) {
+    return c.json({ error: "not_found" }, 404);
+  }
+
+  const { email } = c.req.valid("json");
+  const result = await service.setChipPlayer(catId, email);
+  if (result.kind === "player_not_found") return c.json({ error: "player_not_found" }, 404);
+  if (result.kind === "not_a_member") return c.json({ error: "not_a_member" }, 409);
+  return c.json(result.cat, 200);
 });

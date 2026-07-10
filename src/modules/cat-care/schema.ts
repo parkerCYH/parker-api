@@ -19,6 +19,9 @@ export const cats = catCareSchema.table("cats", {
   birthdate: date("birthdate"),
   notes: text("notes"),
   archivedAt: timestamp("archived_at", { withTimezone: true }),
+  // 晶片登記責任人(見 docs/services/cat-care.md「例外」段落)——刻意不叫 owner_player_id,
+  // 避免跟 User-RBAC 的 Owner Role 撞名。跨 module FK,理由同上,手動加在 migration SQL。
+  chipPlayerId: uuid("chip_player_id"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

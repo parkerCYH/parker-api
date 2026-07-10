@@ -1,5 +1,12 @@
 export { authRoutes } from "./routes.js";
-export { canPlayer, getPlayerProfile, grantAccess, listPlayersWithAccess, revokeAccess } from "./service.js";
+export {
+  canPlayer,
+  getPlayerByEmail,
+  getPlayerProfile,
+  grantAccess,
+  listPlayersWithAccess,
+  revokeAccess,
+} from "./service.js";
 export { buildGoogleAuthUrl, exchangeGoogleCode } from "./google-oauth.js";
 export type { GoogleProfile } from "./google-oauth.js";
 // 給其他有 Player 路由的 module 用(見 docs/services/auth.md「其他 service 收到 request 時只

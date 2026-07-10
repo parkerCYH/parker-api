@@ -86,6 +86,19 @@ interface CatResponse {
   birthdate?: string | null;
   notes?: string | null;
   createdAt: string;
+  chipPlayerId?: string | null;
+}
+
+// 建一個全新、有 catCare.access 的 Player,給邀請/退出/晶片轉移這類需要「另一個真人」的測試用。
+async function newCatCarePlayer(label: string) {
+  const profile = {
+    sub: `google-${label}-${randomUUID()}`,
+    email: `${label}-${randomUUID()}@example.com`,
+    name: label,
+    picture: "https://example.com/avatar.png",
+  };
+  const login = await loginPlayer(profile, CAT_CARE_REFERER, "catCare.access");
+  return { ...login, profile };
 }
 
 describe("cat-care routes", () => {
@@ -425,5 +438,291 @@ describe("cat-care routes", () => {
       },
     );
     expect(forbiddenRes.status).toBe(403);
+  });
+
+  it("lets a member invite an existing Player by email, who then gains access (ticket #24)", async () => {
+    const createRes = await app.request("/api/v1/cat-care/cats", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${authorizedToken}`,
+      },
+      body: JSON.stringify({ name: "Invite Test Cat" }),
+    });
+    const cat = (await createRes.json()) as CatResponse;
+
+    const invitee = await newCatCarePlayer("invitee");
+
+    // 邀請前,對方看不到這隻貓
+    const beforeRes = await app.request(`/api/v1/cat-care/cats/${cat.id}`, {
+      headers: { authorization: `Bearer ${invitee.accessToken}` },
+    });
+    expect(beforeRes.status).toBe(404);
+
+    const inviteRes = await app.request(`/api/v1/cat-care/cats/${cat.id}/players`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${authorizedToken}`,
+      },
+      body: JSON.stringify({ email: invitee.profile.email }),
+    });
+    expect(inviteRes.status).toBe(201);
+    const invited = (await inviteRes.json()) as { id: string; email: string };
+    expect(invited.email).toBe(invitee.profile.email);
+
+    const afterRes = await app.request(`/api/v1/cat-care/cats/${cat.id}`, {
+      headers: { authorization: `Bearer ${invitee.accessToken}` },
+    });
+    expect(afterRes.status).toBe(200);
+  });
+
+  it("404s inviting an email with no parker-api account", async () => {
+    const createRes = await app.request("/api/v1/cat-care/cats", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${authorizedToken}`,
+      },
+      body: JSON.stringify({ name: "Invite Unknown Email Cat" }),
+    });
+    const cat = (await createRes.json()) as CatResponse;
+
+    const res = await app.request(`/api/v1/cat-care/cats/${cat.id}/players`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${authorizedToken}`,
+      },
+      body: JSON.stringify({ email: `nobody-${randomUUID()}@example.com` }),
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it("404s a non-member trying to invite someone into a cat", async () => {
+    const createRes = await app.request("/api/v1/cat-care/cats", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${authorizedToken}`,
+      },
+      body: JSON.stringify({ name: "Not Yours To Invite Into" }),
+    });
+    const cat = (await createRes.json()) as CatResponse;
+
+    const outsider = await newCatCarePlayer("outsider");
+    const someoneElse = await newCatCarePlayer("someone-else");
+
+    const res = await app.request(`/api/v1/cat-care/cats/${cat.id}/players`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${outsider.accessToken}`,
+      },
+      body: JSON.stringify({ email: someoneElse.profile.email }),
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it("lets a member leave a cat, but 404s leaving one they don't belong to (ticket #24)", async () => {
+    const createRes = await app.request("/api/v1/cat-care/cats", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${authorizedToken}`,
+      },
+      body: JSON.stringify({ name: "Leave Test Cat" }),
+    });
+    const cat = (await createRes.json()) as CatResponse;
+
+    const member = await newCatCarePlayer("leaving-member");
+    await app.request(`/api/v1/cat-care/cats/${cat.id}/players`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${authorizedToken}`,
+      },
+      body: JSON.stringify({ email: member.profile.email }),
+    });
+
+    const leaveRes = await app.request(`/api/v1/cat-care/cats/${cat.id}/players/me`, {
+      method: "DELETE",
+      headers: { authorization: `Bearer ${member.accessToken}` },
+    });
+    expect(leaveRes.status).toBe(204);
+
+    // 已經退出了,不再是 member
+    const afterRes = await app.request(`/api/v1/cat-care/cats/${cat.id}`, {
+      headers: { authorization: `Bearer ${member.accessToken}` },
+    });
+    expect(afterRes.status).toBe(404);
+
+    // 再退一次(已經不是 member)回 404
+    const secondLeaveRes = await app.request(`/api/v1/cat-care/cats/${cat.id}/players/me`, {
+      method: "DELETE",
+      headers: { authorization: `Bearer ${member.accessToken}` },
+    });
+    expect(secondLeaveRes.status).toBe(404);
+  });
+
+  it("refuses to let the last member of a chip-less cat leave (would orphan it)", async () => {
+    const createRes = await app.request("/api/v1/cat-care/cats", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${authorizedToken}`,
+      },
+      body: JSON.stringify({ name: "Sole Member Cat" }),
+    });
+    const cat = (await createRes.json()) as CatResponse;
+
+    const res = await app.request(`/api/v1/cat-care/cats/${cat.id}/players/me`, {
+      method: "DELETE",
+      headers: { authorization: `Bearer ${authorizedToken}` },
+    });
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBe("would_orphan");
+  });
+
+  it("sets and transfers the chip-registration custodian; custodian can't leave until transferred (ticket #24)", async () => {
+    const createRes = await app.request("/api/v1/cat-care/cats", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${authorizedToken}`,
+      },
+      body: JSON.stringify({ name: "Chip Player Cat" }),
+    });
+    const cat = (await createRes.json()) as CatResponse;
+
+    const successor = await newCatCarePlayer("chip-successor");
+    await app.request(`/api/v1/cat-care/cats/${cat.id}/players`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${authorizedToken}`,
+      },
+      body: JSON.stringify({ email: successor.profile.email }),
+    });
+
+    // 還不是成員的人不能被設成晶片責任人
+    const nonMember = await newCatCarePlayer("chip-non-member");
+    const rejectedRes = await app.request(`/api/v1/cat-care/cats/${cat.id}/chip-player`, {
+      method: "PUT",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${authorizedToken}`,
+      },
+      body: JSON.stringify({ email: nonMember.profile.email }),
+    });
+    expect(rejectedRes.status).toBe(409);
+
+    // 設定 authorizedToken 的 player 為晶片責任人
+    const setRes = await app.request(`/api/v1/cat-care/cats/${cat.id}/chip-player`, {
+      method: "PUT",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${authorizedToken}`,
+      },
+      body: JSON.stringify({ email: AUTHORIZED_PROFILE.email }),
+    });
+    expect(setRes.status).toBe(200);
+    const cat1 = (await setRes.json()) as CatResponse;
+    expect(cat1.chipPlayerId).toBeTruthy();
+
+    // 責任人本人不能直接退出
+    const blockedLeaveRes = await app.request(`/api/v1/cat-care/cats/${cat.id}/players/me`, {
+      method: "DELETE",
+      headers: { authorization: `Bearer ${authorizedToken}` },
+    });
+    expect(blockedLeaveRes.status).toBe(409);
+    const blockedBody = (await blockedLeaveRes.json()) as { error: string };
+    expect(blockedBody.error).toBe("chip_holder");
+
+    // 轉移給另一位既有成員
+    const transferRes = await app.request(`/api/v1/cat-care/cats/${cat.id}/chip-player`, {
+      method: "PUT",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${authorizedToken}`,
+      },
+      body: JSON.stringify({ email: successor.profile.email }),
+    });
+    expect(transferRes.status).toBe(200);
+
+    // 轉移之後,原本的責任人可以退出了(即使退到只剩責任人一人也允許)
+    const leaveAfterTransferRes = await app.request(`/api/v1/cat-care/cats/${cat.id}/players/me`, {
+      method: "DELETE",
+      headers: { authorization: `Bearer ${authorizedToken}` },
+    });
+    expect(leaveAfterTransferRes.status).toBe(204);
+  });
+
+  it("filters bowel-movement and weight-record history by ?from=&to= (ticket #24)", async () => {
+    const createRes = await app.request("/api/v1/cat-care/cats", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${authorizedToken}`,
+      },
+      body: JSON.stringify({ name: "Date Filter Cat" }),
+    });
+    const cat = (await createRes.json()) as CatResponse;
+
+    const oldDate = "2020-01-01T00:00:00.000Z";
+    const recentDate = "2026-06-01T00:00:00.000Z";
+
+    await app.request(`/api/v1/cat-care/cats/${cat.id}/bowel-movements`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${authorizedToken}`,
+      },
+      body: JSON.stringify({ recordedAt: oldDate, stoolType: "old" }),
+    });
+    await app.request(`/api/v1/cat-care/cats/${cat.id}/bowel-movements`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${authorizedToken}`,
+      },
+      body: JSON.stringify({ recordedAt: recentDate, stoolType: "recent" }),
+    });
+
+    await app.request(`/api/v1/cat-care/cats/${cat.id}/weight-records`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${authorizedToken}`,
+      },
+      body: JSON.stringify({ measuredAt: oldDate, weightGrams: 4000 }),
+    });
+    await app.request(`/api/v1/cat-care/cats/${cat.id}/weight-records`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${authorizedToken}`,
+      },
+      body: JSON.stringify({ measuredAt: recentDate, weightGrams: 4100 }),
+    });
+
+    const bowelRes = await app.request(
+      `/api/v1/cat-care/cats/${cat.id}/bowel-movements?from=2025-01-01&to=2026-12-31`,
+      { headers: { authorization: `Bearer ${authorizedToken}` } },
+    );
+    expect(bowelRes.status).toBe(200);
+    const bowelRecords = (await bowelRes.json()) as Array<{ stoolType: string }>;
+    expect(bowelRecords.some((r) => r.stoolType === "recent")).toBe(true);
+    expect(bowelRecords.some((r) => r.stoolType === "old")).toBe(false);
+
+    const weightRes = await app.request(
+      `/api/v1/cat-care/cats/${cat.id}/weight-records?from=2025-01-01&to=2026-12-31`,
+      { headers: { authorization: `Bearer ${authorizedToken}` } },
+    );
+    expect(weightRes.status).toBe(200);
+    const weightRecords = (await weightRes.json()) as Array<{ weightGrams: number }>;
+    expect(weightRecords.some((r) => r.weightGrams === 4100)).toBe(true);
+    expect(weightRecords.some((r) => r.weightGrams === 4000)).toBe(false);
   });
 });

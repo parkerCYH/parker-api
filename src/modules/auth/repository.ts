@@ -12,6 +12,11 @@ export async function findPlayerById(id: string) {
   return player;
 }
 
+export async function findPlayerByEmail(email: string) {
+  const [player] = await db.select().from(players).where(eq(players.email, email)).limit(1);
+  return player;
+}
+
 export async function createPlayer(input: {
   googleSub: string;
   email: string;

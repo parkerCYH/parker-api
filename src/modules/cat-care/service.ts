@@ -1,4 +1,4 @@
-import { canPlayer, listPlayersWithAccess } from "../auth/index.js";
+import { canPlayer, getPlayerByEmail, listPlayersWithAccess } from "../auth/index.js";
 import * as repo from "./repository.js";
 
 export async function createCat(
@@ -26,6 +26,60 @@ export async function archiveCat(catId: string) {
   return repo.archiveCat(catId);
 }
 
+export type InviteResult =
+  | { kind: "ok"; player: NonNullable<Awaited<ReturnType<typeof getPlayerByEmail>>> }
+  | { kind: "player_not_found" };
+
+// POST /cats/{catId}/players(ticket #24):email 查既有帳號,不做邀請碼機制。
+// 已是成員時 idempotent 成功,不當錯誤處理。
+export async function invitePlayer(catId: string, email: string): Promise<InviteResult> {
+  const player = await getPlayerByEmail(email);
+  if (!player) return { kind: "player_not_found" };
+
+  await repo.addCatPlayer(catId, player.id);
+  return { kind: "ok", player };
+}
+
+export type LeaveResult =
+  | { kind: "ok" }
+  | { kind: "not_found" }
+  | { kind: "conflict"; reason: "chip_holder" | "would_orphan" };
+
+// DELETE /cats/{catId}/players/me(ticket #24):僅限本人退出。晶片責任人不能直接退出
+// (須先轉移);沒有晶片責任人的貓不能退到零成員。有晶片責任人時,其他成員可以退到只剩
+// 責任人一人——責任人本身出不去,自然保底至少一名成員。
+export async function leaveCat(catId: string, playerId: string): Promise<LeaveResult> {
+  if (!(await repo.isCatMember(catId, playerId))) return { kind: "not_found" };
+
+  const cat = await repo.findCatById(catId);
+  if (cat?.chipPlayerId === playerId) return { kind: "conflict", reason: "chip_holder" };
+
+  if (!cat?.chipPlayerId) {
+    const memberCount = await repo.countCatPlayers(catId);
+    if (memberCount <= 1) return { kind: "conflict", reason: "would_orphan" };
+  }
+
+  await repo.removeCatPlayer(catId, playerId);
+  return { kind: "ok" };
+}
+
+export type ChipTransferResult =
+  | { kind: "ok"; cat: NonNullable<Awaited<ReturnType<typeof repo.setChipPlayer>>> }
+  | { kind: "player_not_found" }
+  | { kind: "not_a_member" };
+
+// 設定/轉移晶片登記責任人(ticket #24):目標必須先是 cat_players 成員;一旦設定過就只能
+// 轉移,不會被清空(沒有「清空」的操作入口)。
+export async function setChipPlayer(catId: string, email: string): Promise<ChipTransferResult> {
+  const player = await getPlayerByEmail(email);
+  if (!player) return { kind: "player_not_found" };
+
+  if (!(await repo.isCatMember(catId, player.id))) return { kind: "not_a_member" };
+
+  const cat = await repo.setChipPlayer(catId, player.id);
+  return { kind: "ok", cat };
+}
+
 export async function recordBowelMovement(
   catId: string,
   playerId: string,
@@ -41,8 +95,12 @@ export async function recordBowelMovement(
   });
 }
 
-export async function listBowelMovements(catId: string) {
-  return repo.listBowelMovements(catId);
+// 支援 ?from=&to= 日期區間篩選(ticket #24)。
+export async function listBowelMovements(catId: string, range?: { from?: string; to?: string }) {
+  return repo.listBowelMovements(catId, {
+    from: range?.from ? new Date(range.from) : undefined,
+    to: range?.to ? new Date(range.to) : undefined,
+  });
 }
 
 export type EditResult<T> =
@@ -85,8 +143,12 @@ export async function recordWeight(
   });
 }
 
-export async function listWeightRecords(catId: string) {
-  return repo.listWeightRecords(catId);
+// 支援 ?from=&to= 日期區間篩選(ticket #24)。
+export async function listWeightRecords(catId: string, range?: { from?: string; to?: string }) {
+  return repo.listWeightRecords(catId, {
+    from: range?.from ? new Date(range.from) : undefined,
+    to: range?.to ? new Date(range.to) : undefined,
+  });
 }
 
 // PATCH /cats/{catId}/weight-records/{id}(ticket #23):只有當初 measured_by 本人能編輯。

@@ -1,4 +1,4 @@
-import { and, desc, eq, isNull } from "drizzle-orm";
+import { and, desc, eq, gte, isNull, lte } from "drizzle-orm";
 import { db } from "../../shared/db.js";
 import { bowelMovements, catPlayers, cats, weightRecords } from "./schema.js";
 
@@ -91,6 +91,30 @@ export async function archiveCat(catId: string) {
   return cat;
 }
 
+// 邀請(ticket #24):目標已是成員時 no-op,邀請本身是 idempotent 的。
+export async function addCatPlayer(catId: string, playerId: string): Promise<void> {
+  await db.insert(catPlayers).values({ catId, playerId }).onConflictDoNothing();
+}
+
+export async function removeCatPlayer(catId: string, playerId: string): Promise<void> {
+  await db.delete(catPlayers).where(and(eq(catPlayers.catId, catId), eq(catPlayers.playerId, playerId)));
+}
+
+export async function countCatPlayers(catId: string): Promise<number> {
+  const rows = await db.select({ playerId: catPlayers.playerId }).from(catPlayers).where(eq(catPlayers.catId, catId));
+  return rows.length;
+}
+
+// 設定/轉移晶片登記責任人(ticket #24)——呼叫端負責先確認目標是 cat_players 成員。
+export async function setChipPlayer(catId: string, playerId: string) {
+  const [cat] = await db
+    .update(cats)
+    .set({ chipPlayerId: playerId })
+    .where(eq(cats.id, catId))
+    .returning();
+  return cat;
+}
+
 export async function createBowelMovement(input: {
   catId: string;
   recordedBy: string;
@@ -103,11 +127,16 @@ export async function createBowelMovement(input: {
   return row;
 }
 
-export async function listBowelMovements(catId: string) {
+// 支援 ?from=&to= 日期區間篩選 recorded_at(ticket #24)。
+export async function listBowelMovements(catId: string, range?: { from?: Date; to?: Date }) {
+  const conditions = [eq(bowelMovements.catId, catId)];
+  if (range?.from) conditions.push(gte(bowelMovements.recordedAt, range.from));
+  if (range?.to) conditions.push(lte(bowelMovements.recordedAt, range.to));
+
   return db
     .select()
     .from(bowelMovements)
-    .where(eq(bowelMovements.catId, catId))
+    .where(and(...conditions))
     .orderBy(desc(bowelMovements.recordedAt));
 }
 
@@ -136,11 +165,16 @@ export async function createWeightRecord(input: {
   return row;
 }
 
-export async function listWeightRecords(catId: string) {
+// 支援 ?from=&to= 日期區間篩選 measured_at(ticket #24)。
+export async function listWeightRecords(catId: string, range?: { from?: Date; to?: Date }) {
+  const conditions = [eq(weightRecords.catId, catId)];
+  if (range?.from) conditions.push(gte(weightRecords.measuredAt, range.from));
+  if (range?.to) conditions.push(lte(weightRecords.measuredAt, range.to));
+
   return db
     .select()
     .from(weightRecords)
-    .where(eq(weightRecords.catId, catId))
+    .where(and(...conditions))
     .orderBy(desc(weightRecords.measuredAt));
 }
 

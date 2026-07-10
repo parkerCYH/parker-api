@@ -71,6 +71,13 @@
       "when": 1783675741308,
       "tag": "0009_tan_xavin",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1783677581600,
+      "tag": "0010_blue_sumo",
+      "breakpoints": true
     }
   ]
 }
