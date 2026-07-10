@@ -45,6 +45,13 @@ interface ForbiddenResponse {
   playerId: string;
 }
 
+async function startLogin(referer: string = APP_REFERER) {
+  const startRes = await app.request("/api/v1/auth/google", { headers: { referer } });
+  const cookie = startRes.headers.get("set-cookie") ?? "";
+  const state = extractState(startRes.headers.get("location") ?? "");
+  return { cookie, state };
+}
+
 async function attemptLogin(referer: string | undefined = APP_REFERER) {
   stubGoogleFetch();
 
@@ -127,6 +134,52 @@ describe("auth routes", () => {
     });
 
     expect(res.status).toBe(400);
+  });
+
+  it("redirects back to the app with ?error=access_denied when the user cancels consent (ticket #26)", async () => {
+    stubGoogleFetch();
+    const { cookie, state } = await startLogin();
+
+    const res = await app.request(`/api/v1/auth/google/callback?error=access_denied&state=${state}`, {
+      headers: { cookie },
+    });
+
+    expect(res.status).toBe(302);
+    const location = res.headers.get("location") ?? "";
+    expect(location.startsWith(APP_REDIRECT_URL)).toBe(true);
+    const params = new URL(location).searchParams;
+    expect(params.get("error")).toBe("access_denied");
+    expect(params.get("accessToken")).toBeNull();
+  });
+
+  it("redirects back with ?error=access_denied when Google omits both code and error (ticket #26)", async () => {
+    stubGoogleFetch();
+    const { cookie, state } = await startLogin();
+
+    const res = await app.request(`/api/v1/auth/google/callback?state=${state}`, { headers: { cookie } });
+
+    expect(res.status).toBe(302);
+    const params = new URL(res.headers.get("location") ?? "").searchParams;
+    expect(params.get("error")).toBe("access_denied");
+  });
+
+  it("redirects back with ?error=google_auth_failed when token exchange fails (ticket #26)", async () => {
+    const { cookie, state } = await startLogin();
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("boom", { status: 500 })),
+    );
+
+    const res = await app.request(`/api/v1/auth/google/callback?code=fake-code&state=${state}`, {
+      headers: { cookie },
+    });
+
+    expect(res.status).toBe(302);
+    const location = res.headers.get("location") ?? "";
+    expect(location.startsWith(APP_REDIRECT_URL)).toBe(true);
+    const params = new URL(location).searchParams;
+    expect(params.get("error")).toBe("google_auth_failed");
   });
 
   it("issues a new access token via refresh", async () => {

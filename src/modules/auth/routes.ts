@@ -47,6 +47,12 @@ function decodeState(state: string): OAuthStatePayload | undefined {
   }
 }
 
+function redirectWithError(redirectUrl: string, code: string): string {
+  const url = new URL(redirectUrl);
+  url.searchParams.set("error", code);
+  return url.toString();
+}
+
 const googleLoginRoute = createRoute({
   method: "get",
   path: "/google",
@@ -89,12 +95,16 @@ const googleCallbackRoute = createRoute({
     query: z.object({
       code: z.string().optional(),
       state: z.string().optional(),
+      error: z.string().optional(),
     }),
   },
   responses: {
-    302: { description: "Redirect back to the app's registered URL with accessToken/refreshToken" },
+    302: {
+      description:
+        "Redirect back to the app's registered URL — with accessToken/refreshToken on success, or ?error=<code> on cancellation/failure",
+    },
     400: {
-      description: "Missing or mismatched OAuth state",
+      description: "Missing or mismatched OAuth state (can't safely redirect anywhere)",
       content: { "application/json": { schema: errorResponseSchema } },
     },
     403: {
@@ -105,12 +115,13 @@ const googleCallbackRoute = createRoute({
 });
 
 authRoutes.openapi(googleCallbackRoute, async (c) => {
-  const { code, state } = c.req.valid("query");
+  const { code, state, error } = c.req.valid("query");
   const expectedState = getCookie(c, STATE_COOKIE);
 
   deleteCookie(c, STATE_COOKIE, { path: "/" });
 
-  if (!code || !state || !expectedState || state !== expectedState) {
+  // 真正的 CSRF/state 過期情境:不知道該導去哪個 app,只能維持 400 JSON。
+  if (!state || !expectedState || state !== expectedState) {
     return c.json({ error: "invalid_oauth_state" }, 400);
   }
 
@@ -119,7 +130,19 @@ authRoutes.openapi(googleCallbackRoute, async (c) => {
     return c.json({ error: "invalid_oauth_state" }, 400);
   }
 
-  const profile = await exchangeGoogleCode(code, process.env.GOOGLE_REDIRECT_URI ?? "");
+  // Google 帶 error 回來(使用者取消)或根本沒給 code,一律當成 access_denied 導回 app——
+  // state 已經驗證過,知道該導去哪,不需要停在 parker-api 自己的網域。
+  if (error || !code) {
+    return c.redirect(redirectWithError(payload.redirectUrl, "access_denied"));
+  }
+
+  let profile;
+  try {
+    profile = await exchangeGoogleCode(code, process.env.GOOGLE_REDIRECT_URI ?? "");
+  } catch {
+    return c.redirect(redirectWithError(payload.redirectUrl, "google_auth_failed"));
+  }
+
   const player = await findOrCreatePlayer(profile);
 
   if (!(await canPlayer(player.id, `${payload.app}.access`))) {
