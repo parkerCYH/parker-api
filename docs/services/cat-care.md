@@ -37,7 +37,7 @@ cat_care.bowel_movements
   cat_id       -> cat_care.cats.id
   recorded_by  -> auth.players.id  (誰記錄的)
   recorded_at  timestamptz not null
-  stool_type   text null   (自由文字或小型分級,不用 enum)
+  stool_type   text null   (2026-07-10 改列舉,見下方「字串轉 enum」決議;DB 欄位維持 text,由 API 層 z.enum 驗證)
   is_abnormal  boolean not null default false
   notes        text null
   created_at   timestamptz not null default now()
@@ -48,7 +48,7 @@ cat_care.weight_records
   measured_by   -> auth.players.id
   measured_at   timestamptz not null
   weight_grams  integer not null  (固定公克,避免單位混亂)
-  method        text null  (自由文字/小型分級,例如「抱著稱+人重相減」、「貓用體重計」)
+  method        text null  (2026-07-10 改列舉,見下方「字串轉 enum」決議;DB 欄位維持 text,由 API 層 z.enum 驗證)
   notes         text null
   created_at    timestamptz not null default now()
 ```
@@ -105,6 +105,15 @@ Admin gateway 預設**包含**已封存的貓咪及其歷史紀錄(不像 Player
 - `cat_players` 退出:`DELETE /cats/{catId}/players/me` 僅限本人自己退出,不能移除他人
 - 新增 `cats.chip_player_id`(晶片登記責任人,概念對應寵物晶片登記,不存實際晶片編號):設定時必須先是 `cat_players` 成員;一旦設定就不會被清空,只能轉移給另一位現有成員;持有此身分者不能直接退出 `cat_players`,須先轉移責任人身分給別人。沒有 `chip_player_id` 的貓維持原規則:不能退到零成員(避免貓變孤兒、Player app 側沒有任何人能管理,雖然 Admin gateway 仍看得到)
 - 排便/體重歷史列表新增 `?from=&to=` 日期區間篩選,不做 pagination——單一家庭小工具的紀錄量不會大到需要分頁
+
+## 字串轉 enum(2026-07-10 定案,待實作)
+
+盤點 cat-care 所有 API 的 string 欄位,只有以下兩個原本標記「自由文字或小型分級」的欄位改列舉,其餘(`name`、`notes` 全部、`email`)維持自由文字/格式驗證,不列舉。DB 欄位維持 `text`,比照 `admin` module 現有的 `userStatusSchema`/`roleNameSchema` 做法,只在 API 層用 `z.enum([...])` 驗證,不建 Postgres enum type、不加 CHECK constraint:
+
+- `bowel_movements.stoolType`:`normal`(正常)/ `hard`(偏硬)/ `soft`(偏軟或糊狀)/ `watery`(水便)/ `bloody`(帶血)/ `mucous`(有黏液)。與既有的 `isAbnormal` boolean 互補——`isAbnormal` 標記異常,`stoolType` 描述具體形狀
+- `weight_records.method`:`catScale`(貓用體重計)/ `holdAndSubtract`(抱著稱+人重相減)/ `other`(其他,避免日後真的出現第三種量測方式被固定值鎖死)
+
+實際的英文 key 命名由實作時對齊既有慣例微調即可,不需要另外確認。
 
 ## 尚未涵蓋的路由(2026-07-10 第二輪,前端試接後發現)
 
