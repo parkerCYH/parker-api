@@ -17,6 +17,7 @@ export default defineConfig({
       ADMIN_GOOGLE_REDIRECT_URI:
         process.env.ADMIN_GOOGLE_REDIRECT_URI ??
         "http://localhost:3001/api/v1/admin/login/google/callback",
+      ADMIN_DASHBOARD_URL: process.env.ADMIN_DASHBOARD_URL ?? "http://test.admin-dashboard.local",
       AUTH_APP_DOMAINS:
         process.env.AUTH_APP_DOMAINS ??
         JSON.stringify({

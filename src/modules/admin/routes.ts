@@ -29,6 +29,8 @@ import {
   canManageWhitelist,
   canUser,
   canViewUsers,
+  createLoginExchangeCode,
+  exchangeLoginCode,
   listUsers,
   listWhitelist,
   refreshSession,
@@ -73,13 +75,11 @@ const userSchema = z.object({
   status: userStatusSchema,
 });
 
-const pendingResponseSchema = z.object({
-  status: z.literal("pending"),
-  userId: z.string().uuid(),
+const exchangeBodySchema = z.object({
+  code: z.string(),
 });
 
-const approvedResponseSchema = z.object({
-  status: z.literal("approved"),
+const exchangeResponseSchema = z.object({
   accessToken: z.string(),
   refreshToken: z.string(),
   user: userSchema,
@@ -142,7 +142,8 @@ const loginCallbackRoute = createRoute({
   method: "get",
   path: "/login/google/callback",
   tags: ["admin"],
-  summary: "Google OAuth callback: creates a pending application, or logs in an approved User",
+  summary:
+    "Google OAuth callback: redirects to Admin Dashboard with a pending userId, or a one-time exchange code (ADR-0008)",
   request: {
     query: z.object({
       code: z.string().optional(),
@@ -150,14 +151,7 @@ const loginCallbackRoute = createRoute({
     }),
   },
   responses: {
-    200: {
-      description: "Login successful (User already approved)",
-      content: { "application/json": { schema: approvedResponseSchema } },
-    },
-    202: {
-      description: "Application received, awaiting approval",
-      content: { "application/json": { schema: pendingResponseSchema } },
-    },
+    302: { description: "Redirect to ADMIN_DASHBOARD_URL/auth/callback" },
     400: {
       description: "Missing or mismatched OAuth state",
       content: { "application/json": { schema: errorResponseSchema } },
@@ -178,11 +172,52 @@ adminRoutes.openapi(loginCallbackRoute, async (c) => {
   const profile = await exchangeGoogleCode(code, process.env.ADMIN_GOOGLE_REDIRECT_URI ?? "");
   const result = await applyOrLoginWithGoogleProfile(profile);
 
+  const redirectUrl = new URL("/auth/callback", process.env.ADMIN_DASHBOARD_URL ?? "");
+
   if (result.status === "pending") {
-    return c.json(result, 202);
+    redirectUrl.searchParams.set("status", "pending");
+    redirectUrl.searchParams.set("userId", result.userId);
+    return c.redirect(redirectUrl.toString());
   }
 
-  return c.json(result, 200);
+  const exchangeCode = await createLoginExchangeCode(result.user.id);
+  redirectUrl.searchParams.set("status", "approved");
+  redirectUrl.searchParams.set("code", exchangeCode);
+  return c.redirect(redirectUrl.toString());
+});
+
+const loginExchangeRoute = createRoute({
+  method: "post",
+  path: "/login/exchange",
+  tags: ["admin"],
+  summary:
+    "Exchange a one-time login code (from the OAuth callback redirect) for real access/refresh tokens (ADR-0008)",
+  request: {
+    body: {
+      content: { "application/json": { schema: exchangeBodySchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: "Session issued",
+      content: { "application/json": { schema: exchangeResponseSchema } },
+    },
+    400: {
+      description: "Invalid, already-used, or expired code",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+  },
+});
+
+adminRoutes.openapi(loginExchangeRoute, async (c) => {
+  const { code } = c.req.valid("json");
+
+  try {
+    const session = await exchangeLoginCode(code);
+    return c.json(session, 200);
+  } catch {
+    return c.json({ error: "invalid_exchange_code" }, 400);
+  }
 });
 
 const refreshRoute = createRoute({

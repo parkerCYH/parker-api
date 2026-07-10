@@ -40,6 +40,22 @@ export const inviteWhitelist = adminSchema.table("invite_whitelist", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+// 一次性登入 exchange code(ADR-0008):User 核准登入後,callback 不直接把 token 帶在導回
+// Admin Dashboard 的網址上,而是先發一組短效、單次使用的 code,由 Admin Dashboard 的後端
+// 拿去換真正的 token(伺服器對伺服器,不會出現在瀏覽器網址列/歷史紀錄/log)。
+export const loginExchangeCodes = adminSchema.table("login_exchange_codes", {
+  id: uuid("id")
+    .primaryKey()
+    .$defaultFn(() => randomUUID()),
+  codeHash: text("code_hash").notNull(),
+  userId: uuid("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  usedAt: timestamp("used_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const refreshTokens = adminSchema.table("refresh_tokens", {
   id: uuid("id")
     .primaryKey()

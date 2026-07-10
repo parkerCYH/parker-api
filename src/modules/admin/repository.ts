@@ -1,6 +1,6 @@
 import { and, eq, isNotNull, isNull } from "drizzle-orm";
 import { db } from "../../shared/db.js";
-import { inviteWhitelist, refreshTokens, users } from "./schema.js";
+import { inviteWhitelist, loginExchangeCodes, refreshTokens, users } from "./schema.js";
 
 export type UserStatus = "pending" | "approved" | "rejected";
 
@@ -89,6 +89,28 @@ export async function upsertWhitelistEntry(input: { email: string; roleId: strin
 
 export async function deleteWhitelistEntryByEmail(email: string): Promise<void> {
   await db.delete(inviteWhitelist).where(eq(inviteWhitelist.email, email));
+}
+
+export async function insertLoginExchangeCode(input: {
+  codeHash: string;
+  userId: string;
+  expiresAt: Date;
+}) {
+  const [row] = await db.insert(loginExchangeCodes).values(input).returning();
+  return row;
+}
+
+export async function findValidLoginExchangeCode(codeHash: string) {
+  const [row] = await db
+    .select()
+    .from(loginExchangeCodes)
+    .where(and(eq(loginExchangeCodes.codeHash, codeHash), isNull(loginExchangeCodes.usedAt)))
+    .limit(1);
+  return row;
+}
+
+export async function markLoginExchangeCodeUsed(id: string): Promise<void> {
+  await db.update(loginExchangeCodes).set({ usedAt: new Date() }).where(eq(loginExchangeCodes.id, id));
 }
 
 export async function insertRefreshToken(input: { userId: string; tokenHash: string; expiresAt: Date }) {

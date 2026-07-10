@@ -1,9 +1,12 @@
 import { randomUUID } from "node:crypto";
+import { desc, eq } from "drizzle-orm";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import app from "../../app.js";
+import { db } from "../../shared/db.js";
 import { grantAccess } from "../auth/index.js";
 import { createRole } from "../rbac/index.js";
 import { updateUserRole } from "./repository.js";
+import { loginExchangeCodes } from "./schema.js";
 import { canUser } from "./service.js";
 
 const OWNER_PROFILE = {
@@ -57,7 +60,19 @@ interface ApprovedResponse {
   user: { id: string; email: string; name: string; avatarUrl?: string };
 }
 
-async function loginAs(profile: typeof OWNER_PROFILE) {
+function parseAdminCallbackRedirect(location: string) {
+  const url = new URL(location);
+  return {
+    status: url.searchParams.get("status"),
+    code: url.searchParams.get("code"),
+    userId: url.searchParams.get("userId"),
+  };
+}
+
+// ADR-0008:callback 現在是 302 導回 Admin Dashboard(pending 帶 userId,approved 帶一次性
+// exchange code),不再直接回 JSON token。這支 helper 把「導轉 → (approved 才需要)拿 code
+// 換 token」包起來,回傳跟改版前一樣形狀的 Response,讓其餘既有測試不用大改。
+async function loginAs(profile: typeof OWNER_PROFILE): Promise<Response> {
   currentProfile = profile;
   stubGoogleFetch();
 
@@ -65,11 +80,24 @@ async function loginAs(profile: typeof OWNER_PROFILE) {
   const cookie = startRes.headers.get("set-cookie") ?? "";
   const state = extractState(startRes.headers.get("location") ?? "");
 
-  const res = await app.request(`/api/v1/admin/login/google/callback?code=fake-code&state=${state}`, {
+  const callbackRes = await app.request(`/api/v1/admin/login/google/callback?code=fake-code&state=${state}`, {
     headers: { cookie },
   });
 
-  return res;
+  const redirect = parseAdminCallbackRedirect(callbackRes.headers.get("location") ?? "");
+
+  if (redirect.status === "pending") {
+    return new Response(JSON.stringify({ status: "pending", userId: redirect.userId }), { status: 202 });
+  }
+
+  const exchangeRes = await app.request("/api/v1/admin/login/exchange", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ code: redirect.code }),
+  });
+
+  const session = (await exchangeRes.json()) as { accessToken: string; refreshToken: string; user: unknown };
+  return new Response(JSON.stringify({ status: "approved", ...session }), { status: 200 });
 }
 
 // 申請 → 用 Owner 核准指定的 roleName → 用同一個 profile 再登入一次拿 token
@@ -765,5 +793,166 @@ describe("admin routes", () => {
 
     const knownRulesRes = await app.request("/api/v1/admin/rules", { headers: authHeader });
     expect(knownRulesRes.status).toBe(403);
+  });
+
+  it("redirects an approved login to ADMIN_DASHBOARD_URL with a one-time code, exchangeable for real tokens (ADR-0008)", async () => {
+    const profile = {
+      sub: `google-exchange-${randomUUID()}`,
+      email: `exchange-${randomUUID()}@example.com`,
+      name: "Exchange Flow User",
+      picture: "https://example.com/avatar.png",
+    };
+    process.env.SUPER_ADMIN_EMAILS = `${OWNER_PROFILE.email},${profile.email}`;
+
+    currentProfile = profile;
+    stubGoogleFetch();
+
+    const startRes = await app.request("/api/v1/admin/login/google");
+    const cookie = startRes.headers.get("set-cookie") ?? "";
+    const state = extractState(startRes.headers.get("location") ?? "");
+
+    const callbackRes = await app.request(
+      `/api/v1/admin/login/google/callback?code=fake-code&state=${state}`,
+      { headers: { cookie } },
+    );
+    expect(callbackRes.status).toBe(302);
+
+    const location = callbackRes.headers.get("location") ?? "";
+    expect(location.startsWith("http://test.admin-dashboard.local/auth/callback")).toBe(true);
+    const redirect = parseAdminCallbackRedirect(location);
+    expect(redirect.status).toBe("approved");
+    expect(redirect.code).toEqual(expect.any(String));
+
+    const exchangeRes = await app.request("/api/v1/admin/login/exchange", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ code: redirect.code }),
+    });
+    expect(exchangeRes.status).toBe(200);
+    const session = (await exchangeRes.json()) as {
+      accessToken: string;
+      refreshToken: string;
+      user: { email: string };
+    };
+    expect(session.accessToken).toEqual(expect.any(String));
+    expect(session.refreshToken).toEqual(expect.any(String));
+    expect(session.user.email).toBe(profile.email);
+
+    process.env.SUPER_ADMIN_EMAILS = OWNER_PROFILE.email;
+  });
+
+  it("redirects a pending application to ADMIN_DASHBOARD_URL with userId, no exchange needed", async () => {
+    const profile = {
+      sub: `google-pending-redirect-${randomUUID()}`,
+      email: `pending-redirect-${randomUUID()}@example.com`,
+      name: "Pending Redirect User",
+      picture: "https://example.com/avatar.png",
+    };
+
+    currentProfile = profile;
+    stubGoogleFetch();
+
+    const startRes = await app.request("/api/v1/admin/login/google");
+    const cookie = startRes.headers.get("set-cookie") ?? "";
+    const state = extractState(startRes.headers.get("location") ?? "");
+
+    const callbackRes = await app.request(
+      `/api/v1/admin/login/google/callback?code=fake-code&state=${state}`,
+      { headers: { cookie } },
+    );
+    expect(callbackRes.status).toBe(302);
+
+    const location = callbackRes.headers.get("location") ?? "";
+    expect(location.startsWith("http://test.admin-dashboard.local/auth/callback")).toBe(true);
+    const redirect = parseAdminCallbackRedirect(location);
+    expect(redirect.status).toBe("pending");
+    expect(redirect.userId).toEqual(expect.any(String));
+    expect(redirect.code).toBeNull();
+  });
+
+  it("rejects exchanging the same code a second time", async () => {
+    const login = (await (await loginAs(OWNER_PROFILE)).json()) as ApprovedResponse;
+
+    // loginAs 已經內部用掉了那組 code(exchange 只能用一次),用它拿到的 accessToken 反推
+    // 不到原始 code,所以這裡自己重新走一次 callback 拿一組新的 code 來測「用兩次」。
+    currentProfile = OWNER_PROFILE;
+    stubGoogleFetch();
+
+    const startRes = await app.request("/api/v1/admin/login/google");
+    const cookie = startRes.headers.get("set-cookie") ?? "";
+    const state = extractState(startRes.headers.get("location") ?? "");
+    const callbackRes = await app.request(
+      `/api/v1/admin/login/google/callback?code=fake-code&state=${state}`,
+      { headers: { cookie } },
+    );
+    const { code } = parseAdminCallbackRedirect(callbackRes.headers.get("location") ?? "");
+
+    const firstExchange = await app.request("/api/v1/admin/login/exchange", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ code }),
+    });
+    expect(firstExchange.status).toBe(200);
+
+    const secondExchange = await app.request("/api/v1/admin/login/exchange", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ code }),
+    });
+    expect(secondExchange.status).toBe(400);
+
+    expect(login.accessToken).toEqual(expect.any(String));
+  });
+
+  it("rejects exchanging an expired code", async () => {
+    const profile = {
+      sub: `google-expired-code-${randomUUID()}`,
+      email: `expired-code-${randomUUID()}@example.com`,
+      name: "Expired Code User",
+      picture: "https://example.com/avatar.png",
+    };
+    process.env.SUPER_ADMIN_EMAILS = `${OWNER_PROFILE.email},${profile.email}`;
+
+    currentProfile = profile;
+    stubGoogleFetch();
+
+    const startRes = await app.request("/api/v1/admin/login/google");
+    const cookie = startRes.headers.get("set-cookie") ?? "";
+    const state = extractState(startRes.headers.get("location") ?? "");
+    const callbackRes = await app.request(
+      `/api/v1/admin/login/google/callback?code=fake-code&state=${state}`,
+      { headers: { cookie } },
+    );
+    const { code } = parseAdminCallbackRedirect(callbackRes.headers.get("location") ?? "");
+
+    // approved 的導轉只帶 code,不帶 userId(那是 pending 情境才有的),所以用「最新建立的
+    // 那筆 exchange code」來定位——直接把過期時間往回改,不用真的等 60 秒。
+    const [mostRecent] = await db
+      .select()
+      .from(loginExchangeCodes)
+      .orderBy(desc(loginExchangeCodes.createdAt))
+      .limit(1);
+    await db
+      .update(loginExchangeCodes)
+      .set({ expiresAt: new Date(Date.now() - 1000) })
+      .where(eq(loginExchangeCodes.id, mostRecent.id));
+
+    const exchangeRes = await app.request("/api/v1/admin/login/exchange", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ code }),
+    });
+    expect(exchangeRes.status).toBe(400);
+
+    process.env.SUPER_ADMIN_EMAILS = OWNER_PROFILE.email;
+  });
+
+  it("rejects exchanging an unknown code", async () => {
+    const res = await app.request("/api/v1/admin/login/exchange", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ code: "not-a-real-code" }),
+    });
+    expect(res.status).toBe(400);
   });
 });

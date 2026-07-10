@@ -31,6 +31,7 @@ services:
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
       GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-http://localhost:3001/api/v1/auth/google/callback}
       ADMIN_GOOGLE_REDIRECT_URI: ${ADMIN_GOOGLE_REDIRECT_URI:-http://localhost:3001/api/v1/admin/login/google/callback}
+      ADMIN_DASHBOARD_URL: ${ADMIN_DASHBOARD_URL:-http://localhost:3000}
       SUPER_ADMIN_EMAILS: ${SUPER_ADMIN_EMAILS:-}
       AUTH_APP_DOMAINS: ${AUTH_APP_DOMAINS:-}
     depends_on:

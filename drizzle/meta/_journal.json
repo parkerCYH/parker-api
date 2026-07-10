@@ -57,6 +57,13 @@
       "when": 1783615164783,
       "tag": "0007_thick_titania",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1783654183329,
+      "tag": "0008_cloudy_betty_ross",
+      "breakpoints": true
     }
   ]
 }

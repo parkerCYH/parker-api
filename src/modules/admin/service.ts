@@ -5,6 +5,7 @@ import { signAdminAccessToken } from "./jwt.js";
 import * as repo from "./repository.js";
 
 const REFRESH_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const LOGIN_EXCHANGE_CODE_TTL_MS = 60 * 1000;
 
 function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
@@ -56,12 +57,7 @@ async function issueSession(userId: string) {
 
 export type ApplyOrLoginResult =
   | { status: "pending"; userId: string }
-  | {
-      status: "approved";
-      accessToken: string;
-      refreshToken: string;
-      user: ReturnType<typeof toPublicUser>;
-    };
+  | { status: "approved"; user: ReturnType<typeof toPublicUser> };
 
 // ADR-0001:User 不是自動註冊,是「申請 → 待審核 → 既有 User 核准」,除非命中下面兩種
 // 自動核准情境之一:
@@ -104,8 +100,7 @@ export async function applyOrLoginWithGoogleProfile(profile: GoogleProfile): Pro
     return { status: "pending", userId: user.id };
   }
 
-  const session = await issueSession(user.id);
-  return { status: "approved", ...session, user: toPublicUser(user) };
+  return { status: "approved", user: toPublicUser(user) };
 }
 
 export async function refreshSession(rawRefreshToken: string) {
@@ -117,6 +112,40 @@ export async function refreshSession(rawRefreshToken: string) {
 
   const accessToken = await signAdminAccessToken(stored.userId);
   return { accessToken };
+}
+
+// ADR-0008:核准登入不直接把 token 帶在導回 Admin Dashboard 的網址上(User 能碰的資料範圍
+// 比 Player 大得多,token 短暫出現在網址列/瀏覽器歷史/log 裡的風險不值得省一支 API),改發
+// 一組短效(60 秒)、單次使用的 exchange code,由 Admin Dashboard 的後端伺服器對伺服器換
+// 真正的 token。Player 登入(auth module)不受影響,維持 ADR-0006 原本的做法。
+export async function createLoginExchangeCode(userId: string): Promise<string> {
+  const code = randomBytes(32).toString("hex");
+
+  await repo.insertLoginExchangeCode({
+    codeHash: hashToken(code),
+    userId,
+    expiresAt: new Date(Date.now() + LOGIN_EXCHANGE_CODE_TTL_MS),
+  });
+
+  return code;
+}
+
+export async function exchangeLoginCode(rawCode: string) {
+  const stored = await repo.findValidLoginExchangeCode(hashToken(rawCode));
+
+  if (!stored || stored.expiresAt < new Date()) {
+    throw new Error("invalid_exchange_code");
+  }
+
+  await repo.markLoginExchangeCodeUsed(stored.id);
+
+  const user = await repo.findUserById(stored.userId);
+  if (!user) {
+    throw new Error("user_not_found");
+  }
+
+  const session = await issueSession(user.id);
+  return { ...session, user: toPublicUser(user) };
 }
 
 // ADR-0007:沒有角色名稱特判——一個 Role 能做什麼完全由 rbac.role_rules 裡實際塞了哪些規則
