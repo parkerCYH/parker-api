@@ -73,8 +73,11 @@ cat_care.weight_records
 | PATCH | `/cats/{catId}/weight-records/{id}` | 編輯體重紀錄(僅限 `measured_by` 本人) |
 | POST | `/cats/{catId}/players` | 邀請 Player 加入(body `{ email }`,查 `auth.players` 既有帳號) |
 | DELETE | `/cats/{catId}/players/me` | 自己退出(僅限本人;持有 `chip_player_id` 身分者不可退出,須先轉移) |
+| PUT | `/cats/{catId}/chip-player` | 設定/轉移晶片登記責任人(目標須先是成員) |
 
 `GET /cats`、`GET /cats/{catId}` 預設排除已封存的貓咪。
+
+**已知缺口(2026-07-10 第二輪發現,見下方「尚未涵蓋的路由」)**:`catSchema` 目前沒有回傳 `chipPlayerId`,也沒有任何端點能讀出一隻貓目前的 `cat_players` 成員名單——寫入操作(邀請/退出/轉移)都做了,讀取沒有對應補上。
 
 ### Admin Dashboard(透過 admin 的 gateway route)
 
@@ -91,9 +94,9 @@ cat-care 不開任何對外端點給 Admin Dashboard 直接打,也不需要知�
 
 Admin gateway 預設**包含**已封存的貓咪及其歷史紀錄(不像 Player app 那樣排除)——健康追蹤資料在貓咪封存後(過世/停止追蹤)仍有回顧價值,回應多一個 `archivedAt` 欄位供前端判斷即可。
 
-## 尚未涵蓋的路由(已定案,待實作)
+## 已定案並實作完成的決策記錄
 
-以下原本是規格文件中的開放問題,已於 2026-07-10 定案,尚未實作,見對應 ticket:
+以下原本是規格文件中的開放問題,已於 2026-07-10 定案並實作完成:
 
 - 刪除貓咪採**封存**(`cats.archived_at`),不做硬刪除——歷史健康紀錄即使貓咪過世或停止追蹤仍有回顧價值
 - `/bowel-movements/{id}`、`/weight-records/{id}` 新增 **PATCH 編輯**,不維持純唯讀——手動輸入健康數據容易打錯,純新增/刪除重打會弄亂歷史紀錄的時序
@@ -102,3 +105,10 @@ Admin gateway 預設**包含**已封存的貓咪及其歷史紀錄(不像 Player
 - `cat_players` 退出:`DELETE /cats/{catId}/players/me` 僅限本人自己退出,不能移除他人
 - 新增 `cats.chip_player_id`(晶片登記責任人,概念對應寵物晶片登記,不存實際晶片編號):設定時必須先是 `cat_players` 成員;一旦設定就不會被清空,只能轉移給另一位現有成員;持有此身分者不能直接退出 `cat_players`,須先轉移責任人身分給別人。沒有 `chip_player_id` 的貓維持原規則:不能退到零成員(避免貓變孤兒、Player app 側沒有任何人能管理,雖然 Admin gateway 仍看得到)
 - 排便/體重歷史列表新增 `?from=&to=` 日期區間篩選,不做 pagination——單一家庭小工具的紀錄量不會大到需要分頁
+
+## 尚未涵蓋的路由(2026-07-10 第二輪,前端試接後發現)
+
+- **`GET /cats/{catId}/players`(缺,應補)**:讀出一隻貓目前的 `cat_players` 成員名單。邀請/退出/轉移晶片登記人這些寫入操作都做了,但完全沒有對應的讀取端點,前端「共同照護者區塊」做不出來。
+- **`catSchema` 補上 `chipPlayerId`(缺,應補)**:`GET /cats`、`GET /cats/{catId}` 目前不回傳 `chipPlayerId`,即使已經用 `PUT /cats/{catId}/chip-player` 設定過。這是回應欄位漏掉,不是設計問題。
+- **`DELETE /cats/{catId}/bowel-movements/{id}`、`DELETE /cats/{catId}/weight-records/{id}`(缺,應補)**:目前單筆紀錄只有 PATCH 編輯,沒有刪除。整隻貓的封存邏輯(保留歷史回顧價值)不適用單筆數據點——打錯整筆想刪掉是合理需求,不需要比照封存做軟刪除,直接 hard delete,權限比照 PATCH 限本人。
+- **排便歷史 `isAbnormal` query 篩選(不補)**:跟「不做 pagination」是同一個判斷——單一家庭小工具的紀錄量小到可以整批抓回來,前端拿到 `isAbnormal` 欄位後自己 `.filter()` 幾乎零成本,不值得為了一個 boolean 篩選多開後端 query 參數。若未來資料量成長到真的需要 pagination,這個判斷要重新評估(屆時篩選才會變成前端做不到的事)。
