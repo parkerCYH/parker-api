@@ -15,14 +15,17 @@
 
 貓咪本身是獨立實體(`cats`),與 `auth.players` 是多對多關係(透過 `cat_players` 中間表),方便未來多隻貓、或多個 Player 共同管理同一隻貓,不需要重新設計 schema。中間表不分角色,所有列在其中的 Player 權限均等——cat-care 是家庭共用的健康記錄工具,不需要像權限管理系統那樣細分。
 
+**例外**:`cats.chip_player_id` 代表這隻貓的晶片登記責任人(概念上對應政府寵物登記的晶片,但不存實際晶片編號),是 `cat_players` 均等規則之外唯一的特殊身分。注意這個欄位刻意不叫 `owner_player_id`——「Owner」在這個專案已經是 User-RBAC 的 Role 名稱(見 `CONTEXT.md`、`docs/services/admin.md`),跟這裡「貓的晶片責任人」是完全不同的概念,取名要避開衝突。
+
 ```
 cat_care.cats
   id           uuid PK
   name         text not null
   birthdate    date null
   notes        text null
-  archived_at  timestamptz null  (封存/軟刪除,見下方「尚未涵蓋的路由」決議)
-  created_at   timestamptz not null default now()
+  archived_at     timestamptz null  (封存/軟刪除,見下方「尚未涵蓋的路由」決議)
+  chip_player_id  uuid null -> auth.players.id  (晶片登記責任人,見上方「例外」說明)
+  created_at      timestamptz not null default now()
 
 cat_care.cat_players  (多對多中間表,不分角色)
   cat_id     -> cat_care.cats.id
@@ -62,12 +65,14 @@ cat_care.weight_records
 | GET | `/cats` | 列出貓咪 |
 | GET | `/cats/{catId}` | 單一貓咪詳情 |
 | POST | `/cats/{catId}/bowel-movements` | 新增排便紀錄 |
-| GET | `/cats/{catId}/bowel-movements` | 排便紀錄列表 |
+| GET | `/cats/{catId}/bowel-movements` | 排便紀錄列表(支援 `?from=&to=` 日期區間篩選) |
 | POST | `/cats/{catId}/weight-records` | 新增體重紀錄 |
-| GET | `/cats/{catId}/weight-records` | 體重紀錄列表 |
+| GET | `/cats/{catId}/weight-records` | 體重紀錄列表(支援 `?from=&to=` 日期區間篩選) |
 | DELETE | `/cats/{catId}` | 封存貓咪(設定 `archived_at`,非硬刪除) |
 | PATCH | `/cats/{catId}/bowel-movements/{id}` | 編輯排便紀錄(僅限 `recorded_by` 本人) |
 | PATCH | `/cats/{catId}/weight-records/{id}` | 編輯體重紀錄(僅限 `measured_by` 本人) |
+| POST | `/cats/{catId}/players` | 邀請 Player 加入(body `{ email }`,查 `auth.players` 既有帳號) |
+| DELETE | `/cats/{catId}/players/me` | 自己退出(僅限本人;持有 `chip_player_id` 身分者不可退出,須先轉移) |
 
 `GET /cats`、`GET /cats/{catId}` 預設排除已封存的貓咪。
 
@@ -93,3 +98,7 @@ Admin gateway 預設**包含**已封存的貓咪及其歷史紀錄(不像 Player
 - 刪除貓咪採**封存**(`cats.archived_at`),不做硬刪除——歷史健康紀錄即使貓咪過世或停止追蹤仍有回顧價值
 - `/bowel-movements/{id}`、`/weight-records/{id}` 新增 **PATCH 編輯**,不維持純唯讀——手動輸入健康數據容易打錯,純新增/刪除重打會弄亂歷史紀錄的時序
 - Admin Dashboard gateway 對已封存的貓咪維持**可見**,與 Player app 排除已封存的行為不同
+- `cat_players` 邀請:`POST /cats/{catId}/players` 用 email 查 `auth.players` 既有帳號並加入,不做邀請碼/連結——cat-care 是家庭共用工具,邀請對象都是已知的家人/朋友,不需要公開產品那種邀請碼機制
+- `cat_players` 退出:`DELETE /cats/{catId}/players/me` 僅限本人自己退出,不能移除他人
+- 新增 `cats.chip_player_id`(晶片登記責任人,概念對應寵物晶片登記,不存實際晶片編號):設定時必須先是 `cat_players` 成員;一旦設定就不會被清空,只能轉移給另一位現有成員;持有此身分者不能直接退出 `cat_players`,須先轉移責任人身分給別人。沒有 `chip_player_id` 的貓維持原規則:不能退到零成員(避免貓變孤兒、Player app 側沒有任何人能管理,雖然 Admin gateway 仍看得到)
+- 排便/體重歷史列表新增 `?from=&to=` 日期區間篩選,不做 pagination——單一家庭小工具的紀錄量不會大到需要分頁
