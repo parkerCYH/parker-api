@@ -18,6 +18,7 @@ export const cats = catCareSchema.table("cats", {
   name: text("name").notNull(),
   birthdate: date("birthdate"),
   notes: text("notes"),
+  archivedAt: timestamp("archived_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

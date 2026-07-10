@@ -16,6 +16,7 @@ const catSchema = z.object({
   name: z.string(),
   birthdate: z.string().nullable().optional(),
   notes: z.string().nullable().optional(),
+  archivedAt: z.string().nullable().optional(),
   createdAt: z.string(),
 });
 
@@ -42,6 +43,7 @@ const weightRecordSchema = z.object({
 });
 
 const catIdParamSchema = z.object({ catId: z.string().uuid() });
+const catRecordParamSchema = z.object({ catId: z.string().uuid(), id: z.string().uuid() });
 
 // 每個 Player route 進入點都要過這一關(ticket #13):驗證 Bearer access token,
 // 再用 auth 的 canPlayer 檢查 catCare.access。回傳結果而非 Response——讓每個 handler
@@ -172,6 +174,42 @@ catCareRoutes.openapi(getCatRoute, async (c) => {
   return c.json(cat, 200);
 });
 
+const archiveCatRoute = createRoute({
+  method: "delete",
+  path: "/cats/{catId}",
+  tags: ["cat-care"],
+  summary: "Archive a cat (soft delete; caller must be a member)",
+  request: { params: catIdParamSchema },
+  responses: {
+    200: { description: "Archived", content: { "application/json": { schema: catSchema } } },
+    401: {
+      description: "Missing or invalid access token",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    403: {
+      description: "Player lacks catCare.access",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    404: {
+      description: "Cat not found or caller is not a member",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+  },
+});
+
+catCareRoutes.openapi(archiveCatRoute, async (c) => {
+  const auth = await authenticatePlayer(c);
+  if (!auth.ok) return c.json({ error: auth.error }, auth.status);
+
+  const { catId } = c.req.valid("param");
+  if (!(await service.isCatMember(catId, auth.playerId))) {
+    return c.json({ error: "not_found" }, 404);
+  }
+
+  const cat = await service.archiveCat(catId);
+  return c.json(cat, 200);
+});
+
 const createBowelMovementRoute = createRoute({
   method: "post",
   path: "/cats/{catId}/bowel-movements",
@@ -262,6 +300,55 @@ catCareRoutes.openapi(listBowelMovementsRoute, async (c) => {
   return c.json(records, 200);
 });
 
+const updateBowelMovementRoute = createRoute({
+  method: "patch",
+  path: "/cats/{catId}/bowel-movements/{id}",
+  tags: ["cat-care"],
+  summary: "Edit a bowel movement record (only the recording Player may edit)",
+  request: {
+    params: catRecordParamSchema,
+    body: {
+      content: {
+        "application/json": {
+          schema: z.object({
+            recordedAt: z.string().datetime().optional(),
+            stoolType: z.string().optional(),
+            isAbnormal: z.boolean().optional(),
+            notes: z.string().optional(),
+          }),
+        },
+      },
+    },
+  },
+  responses: {
+    200: { description: "Updated", content: { "application/json": { schema: bowelMovementSchema } } },
+    401: {
+      description: "Missing or invalid access token",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    403: {
+      description: "Player lacks catCare.access, or is not the original recorder",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    404: {
+      description: "Record not found for this cat",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+  },
+});
+
+catCareRoutes.openapi(updateBowelMovementRoute, async (c) => {
+  const auth = await authenticatePlayer(c);
+  if (!auth.ok) return c.json({ error: auth.error }, auth.status);
+
+  const { catId, id } = c.req.valid("param");
+  const body = c.req.valid("json");
+  const result = await service.updateBowelMovement(catId, id, auth.playerId, body);
+  if (result.kind === "not_found") return c.json({ error: "not_found" }, 404);
+  if (result.kind === "forbidden") return c.json({ error: "forbidden" }, 403);
+  return c.json(result.record, 200);
+});
+
 const createWeightRecordRoute = createRoute({
   method: "post",
   path: "/cats/{catId}/weight-records",
@@ -350,4 +437,53 @@ catCareRoutes.openapi(listWeightRecordsRoute, async (c) => {
 
   const records = await service.listWeightRecords(catId);
   return c.json(records, 200);
+});
+
+const updateWeightRecordRoute = createRoute({
+  method: "patch",
+  path: "/cats/{catId}/weight-records/{id}",
+  tags: ["cat-care"],
+  summary: "Edit a weight record (only the measuring Player may edit)",
+  request: {
+    params: catRecordParamSchema,
+    body: {
+      content: {
+        "application/json": {
+          schema: z.object({
+            measuredAt: z.string().datetime().optional(),
+            weightGrams: z.number().int().positive().optional(),
+            method: z.string().optional(),
+            notes: z.string().optional(),
+          }),
+        },
+      },
+    },
+  },
+  responses: {
+    200: { description: "Updated", content: { "application/json": { schema: weightRecordSchema } } },
+    401: {
+      description: "Missing or invalid access token",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    403: {
+      description: "Player lacks catCare.access, or is not the original measurer",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    404: {
+      description: "Record not found for this cat",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+  },
+});
+
+catCareRoutes.openapi(updateWeightRecordRoute, async (c) => {
+  const auth = await authenticatePlayer(c);
+  if (!auth.ok) return c.json({ error: auth.error }, auth.status);
+
+  const { catId, id } = c.req.valid("param");
+  const body = c.req.valid("json");
+  const result = await service.updateWeightRecord(catId, id, auth.playerId, body);
+  if (result.kind === "not_found") return c.json({ error: "not_found" }, 404);
+  if (result.kind === "forbidden") return c.json({ error: "forbidden" }, 403);
+  return c.json(result.record, 200);
 });

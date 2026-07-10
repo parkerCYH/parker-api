@@ -673,6 +673,45 @@ describe("admin routes", () => {
     expect(weightRecords.some((r) => r.weightGrams === 4300)).toBe(true);
   });
 
+  it("keeps an archived cat visible via the gateway, with archivedAt set (ticket #23)", async () => {
+    const owner = (await (await loginAs(OWNER_PROFILE)).json()) as ApprovedResponse;
+    const adminAuthHeader = { authorization: `Bearer ${owner.accessToken}` };
+
+    const player = await loginPlayerWithCatCareAccess();
+    const playerAuthHeader = { authorization: `Bearer ${player.accessToken}` };
+
+    const createCatRes = await app.request("/api/v1/cat-care/cats", {
+      method: "POST",
+      headers: { "content-type": "application/json", ...playerAuthHeader },
+      body: JSON.stringify({ name: "Archived Gateway Cat" }),
+    });
+    const cat = (await createCatRes.json()) as { id: string };
+
+    const archiveRes = await app.request(`/api/v1/cat-care/cats/${cat.id}`, {
+      method: "DELETE",
+      headers: playerAuthHeader,
+    });
+    expect(archiveRes.status).toBe(200);
+
+    // Player app 排除已封存的貓咪
+    const playerListRes = await app.request("/api/v1/cat-care/cats", { headers: playerAuthHeader });
+    const playerCats = (await playerListRes.json()) as Array<{ id: string }>;
+    expect(playerCats.some((c) => c.id === cat.id)).toBe(false);
+
+    // admin gateway 仍看得到,且帶 archivedAt
+    const listRes = await app.request("/api/v1/admin/cat-care/cats", { headers: adminAuthHeader });
+    const cats = (await listRes.json()) as Array<{ id: string; archivedAt?: string | null }>;
+    const gatewayCat = cats.find((c) => c.id === cat.id);
+    expect(gatewayCat?.archivedAt).toBeTruthy();
+
+    const detailRes = await app.request(`/api/v1/admin/cat-care/cats/${cat.id}`, {
+      headers: adminAuthHeader,
+    });
+    expect(detailRes.status).toBe(200);
+    const detail = (await detailRes.json()) as { archivedAt?: string | null };
+    expect(detail.archivedAt).toBeTruthy();
+  });
+
   it("404s the cat detail/records gateway routes for a nonexistent cat", async () => {
     const owner = (await (await loginAs(OWNER_PROFILE)).json()) as ApprovedResponse;
     const authHeader = { authorization: `Bearer ${owner.accessToken}` };

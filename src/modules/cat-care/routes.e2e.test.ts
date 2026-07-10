@@ -245,4 +245,185 @@ describe("cat-care routes", () => {
     const allCats = await listAllCats();
     expect(allCats.some((c) => c.id === cat.id)).toBe(true);
   });
+
+  it("archives a cat instead of hard-deleting it (ticket #23)", async () => {
+    const createRes = await app.request("/api/v1/cat-care/cats", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${authorizedToken}`,
+      },
+      body: JSON.stringify({ name: "Archive Test Cat" }),
+    });
+    const cat = (await createRes.json()) as CatResponse;
+
+    const archiveRes = await app.request(`/api/v1/cat-care/cats/${cat.id}`, {
+      method: "DELETE",
+      headers: { authorization: `Bearer ${authorizedToken}` },
+    });
+    expect(archiveRes.status).toBe(200);
+    const archived = (await archiveRes.json()) as CatResponse & { archivedAt: string };
+    expect(archived.archivedAt).toBeTruthy();
+
+    // Player app 的 list/get 預設排除已封存的貓咪,視同不存在
+    const listRes = await app.request("/api/v1/cat-care/cats", {
+      headers: { authorization: `Bearer ${authorizedToken}` },
+    });
+    const cats = (await listRes.json()) as CatResponse[];
+    expect(cats.some((c) => c.id === cat.id)).toBe(false);
+
+    const getRes = await app.request(`/api/v1/cat-care/cats/${cat.id}`, {
+      headers: { authorization: `Bearer ${authorizedToken}` },
+    });
+    expect(getRes.status).toBe(404);
+
+    // admin gateway 的 listAllCats() 仍看得到,且帶 archivedAt
+    const allCats = await listAllCats();
+    const gatewayCat = allCats.find((c) => c.id === cat.id);
+    expect(gatewayCat?.archivedAt).toBeTruthy();
+  });
+
+  it("404s archiving a cat the caller is not a member of", async () => {
+    const createRes = await app.request("/api/v1/cat-care/cats", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${authorizedToken}`,
+      },
+      body: JSON.stringify({ name: "Not Yours To Archive" }),
+    });
+    const cat = (await createRes.json()) as CatResponse;
+
+    const otherProfile = {
+      sub: `google-other-${randomUUID()}`,
+      email: `other-${randomUUID()}@example.com`,
+      name: "Other Player",
+      picture: "https://example.com/avatar.png",
+    };
+    const other = await loginPlayer(otherProfile, CAT_CARE_REFERER, "catCare.access");
+
+    const res = await app.request(`/api/v1/cat-care/cats/${cat.id}`, {
+      method: "DELETE",
+      headers: { authorization: `Bearer ${other.accessToken}` },
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it("lets only the recording Player edit a bowel movement (ticket #23)", async () => {
+    const createRes = await app.request("/api/v1/cat-care/cats", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${authorizedToken}`,
+      },
+      body: JSON.stringify({ name: "Bowel Edit Test Cat" }),
+    });
+    const cat = (await createRes.json()) as CatResponse;
+
+    const recordRes = await app.request(`/api/v1/cat-care/cats/${cat.id}/bowel-movements`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${authorizedToken}`,
+      },
+      body: JSON.stringify({ stoolType: "normal", isAbnormal: false }),
+    });
+    const record = (await recordRes.json()) as { id: string };
+
+    const editRes = await app.request(
+      `/api/v1/cat-care/cats/${cat.id}/bowel-movements/${record.id}`,
+      {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${authorizedToken}`,
+        },
+        body: JSON.stringify({ isAbnormal: true, notes: "corrected" }),
+      },
+    );
+    expect(editRes.status).toBe(200);
+    const updated = (await editRes.json()) as { isAbnormal: boolean; notes?: string | null };
+    expect(updated.isAbnormal).toBe(true);
+    expect(updated.notes).toBe("corrected");
+
+    // 另一個有 catCare.access 但不是 recorded_by 本人的 Player 不能編輯
+    const otherProfile = {
+      sub: `google-other-${randomUUID()}`,
+      email: `other-${randomUUID()}@example.com`,
+      name: "Other Player",
+      picture: "https://example.com/avatar.png",
+    };
+    const other = await loginPlayer(otherProfile, CAT_CARE_REFERER, "catCare.access");
+
+    const forbiddenRes = await app.request(
+      `/api/v1/cat-care/cats/${cat.id}/bowel-movements/${record.id}`,
+      {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${other.accessToken}`,
+        },
+        body: JSON.stringify({ notes: "not mine to edit" }),
+      },
+    );
+    expect(forbiddenRes.status).toBe(403);
+  });
+
+  it("lets only the measuring Player edit a weight record (ticket #23)", async () => {
+    const createRes = await app.request("/api/v1/cat-care/cats", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${authorizedToken}`,
+      },
+      body: JSON.stringify({ name: "Weight Edit Test Cat" }),
+    });
+    const cat = (await createRes.json()) as CatResponse;
+
+    const recordRes = await app.request(`/api/v1/cat-care/cats/${cat.id}/weight-records`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${authorizedToken}`,
+      },
+      body: JSON.stringify({ weightGrams: 4300 }),
+    });
+    const record = (await recordRes.json()) as { id: string };
+
+    const editRes = await app.request(
+      `/api/v1/cat-care/cats/${cat.id}/weight-records/${record.id}`,
+      {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${authorizedToken}`,
+        },
+        body: JSON.stringify({ weightGrams: 4280 }),
+      },
+    );
+    expect(editRes.status).toBe(200);
+    const updated = (await editRes.json()) as { weightGrams: number };
+    expect(updated.weightGrams).toBe(4280);
+
+    const otherProfile = {
+      sub: `google-other-${randomUUID()}`,
+      email: `other-${randomUUID()}@example.com`,
+      name: "Other Player",
+      picture: "https://example.com/avatar.png",
+    };
+    const other = await loginPlayer(otherProfile, CAT_CARE_REFERER, "catCare.access");
+
+    const forbiddenRes = await app.request(
+      `/api/v1/cat-care/cats/${cat.id}/weight-records/${record.id}`,
+      {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${other.accessToken}`,
+        },
+        body: JSON.stringify({ weightGrams: 1 }),
+      },
+    );
+    expect(forbiddenRes.status).toBe(403);
+  });
 });

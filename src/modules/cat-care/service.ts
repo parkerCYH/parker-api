@@ -18,7 +18,12 @@ export async function listCatsForPlayer(playerId: string) {
 
 export async function getCatForPlayer(catId: string, playerId: string) {
   if (!(await repo.isCatMember(catId, playerId))) return undefined;
-  return repo.findCatById(catId);
+  return repo.findActiveCatById(catId);
+}
+
+// DELETE /cats/{catId}(ticket #23):封存而非硬刪除,歷史紀錄保留。
+export async function archiveCat(catId: string) {
+  return repo.archiveCat(catId);
 }
 
 export async function recordBowelMovement(
@@ -40,6 +45,31 @@ export async function listBowelMovements(catId: string) {
   return repo.listBowelMovements(catId);
 }
 
+export type EditResult<T> =
+  | { kind: "ok"; record: T }
+  | { kind: "not_found" }
+  | { kind: "forbidden" };
+
+// PATCH /cats/{catId}/bowel-movements/{id}(ticket #23):只有當初 recorded_by 本人能編輯。
+export async function updateBowelMovement(
+  catId: string,
+  recordId: string,
+  playerId: string,
+  input: { recordedAt?: string; stoolType?: string; isAbnormal?: boolean; notes?: string },
+): Promise<EditResult<Awaited<ReturnType<typeof repo.updateBowelMovement>>>> {
+  const record = await repo.findBowelMovementById(recordId);
+  if (!record || record.catId !== catId) return { kind: "not_found" };
+  if (record.recordedBy !== playerId) return { kind: "forbidden" };
+
+  const updated = await repo.updateBowelMovement(recordId, {
+    ...(input.recordedAt !== undefined ? { recordedAt: new Date(input.recordedAt) } : {}),
+    ...(input.stoolType !== undefined ? { stoolType: input.stoolType } : {}),
+    ...(input.isAbnormal !== undefined ? { isAbnormal: input.isAbnormal } : {}),
+    ...(input.notes !== undefined ? { notes: input.notes } : {}),
+  });
+  return { kind: "ok", record: updated };
+}
+
 export async function recordWeight(
   catId: string,
   playerId: string,
@@ -57,6 +87,26 @@ export async function recordWeight(
 
 export async function listWeightRecords(catId: string) {
   return repo.listWeightRecords(catId);
+}
+
+// PATCH /cats/{catId}/weight-records/{id}(ticket #23):只有當初 measured_by 本人能編輯。
+export async function updateWeightRecord(
+  catId: string,
+  recordId: string,
+  playerId: string,
+  input: { measuredAt?: string; weightGrams?: number; method?: string; notes?: string },
+): Promise<EditResult<Awaited<ReturnType<typeof repo.updateWeightRecord>>>> {
+  const record = await repo.findWeightRecordById(recordId);
+  if (!record || record.catId !== catId) return { kind: "not_found" };
+  if (record.measuredBy !== playerId) return { kind: "forbidden" };
+
+  const updated = await repo.updateWeightRecord(recordId, {
+    ...(input.measuredAt !== undefined ? { measuredAt: new Date(input.measuredAt) } : {}),
+    ...(input.weightGrams !== undefined ? { weightGrams: input.weightGrams } : {}),
+    ...(input.method !== undefined ? { method: input.method } : {}),
+    ...(input.notes !== undefined ? { notes: input.notes } : {}),
+  });
+  return { kind: "ok", record: updated };
 }
 
 // 給 admin module 當 gateway 呼叫(見 ticket #14、ADR-0005),cat-care 自己不開對外端點。
@@ -82,14 +132,14 @@ export async function listCatCarePlayers() {
   return Promise.all(
     playerIds.map(async (playerId) => ({
       playerId,
-      cats: await repo.listCatsForPlayer(playerId),
+      cats: await repo.listAllCatsForPlayer(playerId),
     })),
   );
 }
 
 export async function getCatCarePlayer(playerId: string) {
   const [cats, hasAccess] = await Promise.all([
-    repo.listCatsForPlayer(playerId),
+    repo.listAllCatsForPlayer(playerId),
     canPlayer(playerId, "catCare.access"),
   ]);
 

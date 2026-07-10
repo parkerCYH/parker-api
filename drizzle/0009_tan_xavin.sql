@@ -1,0 +1,1 @@
+ALTER TABLE "cat_care"."cats" ADD COLUMN "archived_at" timestamp with time zone;
