@@ -40,6 +40,16 @@ auth.refresh_tokens
 
 若 `Referer` 缺失(瀏覽器隱私設定、或前端設了 `Referrer-Policy: no-referrer`)導致查不到對應的 app,直接回 400 拒絕,不做預設 app 的 fallback。**導回網址不接受前端指定**,只能是對照表裡登記過的網址,避免 open redirect。詳見 `docs/adr/0006-app-scoped-login-redirect.md`。
 
+## Google 授權失敗/取消的處理(2026-07-10 定案,待實作)
+
+原本的實作只處理了成功路徑,使用者在 Google 同意畫面按取消、或 Google token 交換/取 profile 失敗時,會停在 `parker-api` 自己的網域看到一坨 JSON,cat-care 等前端完全沒有機會接手顯示友善訊息。定案:
+
+- 只要 `state` cookie 能正確解碼出 `payload.redirectUrl`(不管有沒有 `code`),就一律 302 導回 `${redirectUrl}?error=<code>`——`access_denied`(使用者取消)、`google_auth_failed`(token 交換或取 profile 失敗)。跟成功路徑一樣是「導回 app、用 query param 帶結果」,前端只要多檢查一個 `error` 參數
+- 只有真正的 CSRF 情境(`state` cookie 不存在、或跟 query 的 `state` 對不上,通常是 state cookie 5 分鐘 `maxAge` 過期或請求被竄改)才維持原本的 400 JSON——這種情況本來就不知道該導去哪個 app,無法安全地 redirect
+- 目前 `forbidden_app`(403,Player 通過 Google 驗證但沒有這個 app 的權限)**不在這次範圍內**——那是另一個已知的業務邏輯分支(見上方權限檢查),回應形狀要不要改成一致的 redirect-with-error 是獨立的決定,沒有一併定案
+
+cat-care(以及其他共用 `auth` 的 app)前端拿到 `redirectUrl` 上的 `?error=` 之後,不要嘗試解析 `accessToken`/`refreshToken`,改顯示對應的失敗訊息(例如「登入已取消,請重新登入」)並提供重試入口即可。
+
 ## 可能功能
 
 - Player 註冊 / 登入
