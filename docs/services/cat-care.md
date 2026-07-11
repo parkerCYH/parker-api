@@ -8,7 +8,7 @@
 
 - 記錄貓咪排便時間
 - 記錄貓咪體重與量測時間
-- 依賴 `auth` service 做登入驗證
+- 依賴 `auth` service 做登入驗證——任何 Google 帳號都能登入並自動建立 Player,登入 cat-care 時自動取得 `catCare.access`,不需要人工核准;實際能碰到哪隻貓的資料由 `cat_players`(email 邀請制)決定,見 `docs/services/auth.md`「cat-care 登入即自動授權」
 - 查看歷史紀錄
 
 ## 資料表設計

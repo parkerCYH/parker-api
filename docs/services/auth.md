@@ -50,6 +50,17 @@ auth.refresh_tokens
 
 cat-care(以及其他共用 `auth` 的 app)前端拿到 `redirectUrl` 上的 `?error=` 之後,不要嘗試解析 `accessToken`/`refreshToken`,改顯示對應的失敗訊息(例如「登入已取消,請重新登入」)並提供重試入口即可。
 
+## cat-care 登入即自動授權(2026-07-10 定案,待實作)
+
+`<app>.access` 這條粗粒度開關原本設計成需要另外核准/授予(見上方「Player-RBAC:粗粒度開關」),但一直沒有任何管道能發 `catCare.access`——沒有對外端點、沒有 bootstrap,連開發者自己測都得直接下 SQL。實測時發現這件事,PM session 討論後定案:
+
+- **只針對 `cat-care` 這個 app**:Google 授權成功、`payload.app === "catCare"` 時,登入 callback 在檢查 `canPlayer` 之前先呼叫 `grantAccess(player.id, "catCare.access")`(`grantAccess` 本身用 `onConflictDoNothing`,天生 idempotent,不用先查有沒有再決定要不要發)。實務上等於 cat-care 的 `forbidden_app` 403 分支永遠不會被觸發——任何完成 Google 登入的人都能用 cat-care
+- **理由**:`cat-care` 的每一支 API(除了 `POST /cats`)都已經要求呼叫者是該貓的 `cat_players` 成員,真正的資料存取邊界早就由 email 邀請制的 `cat_players` 管住。`catCare.access` 這道關卡在有了 `cat_players` 之後,實際上只剩下「擋住還沒被邀請、也還沒建過貓的人」這個作用,不值得為此另外維護一套核准機制——cat-care 是家庭共用的健康記錄工具,不是要嚴格控管的系統
+- **不影響其他 app**:這次只改 cat-care 這一條分支,`fit-track`、`rent-sniper`、`weather`、`bill-split` 的 `<app>.access` 檢查維持原樣(需要人工授予)。這幾個 service 的規劃本身也還沒定案(見 Parker-API 實作前規劃 Map 的 frontier),各自要不要比照 cat-care 開放登入,等各自規劃時再決定,不在這次範圍
+- **`POST /cats` 沒有額外邀請門檻**:任何登入過 cat-care 的人都能直接建立新貓、自己成為第一個成員。這維持現況(ticket #13 本來就是這樣設計),這次沒有一併重新討論
+
+詳見 `docs/services/cat-care.md`。
+
 ## 可能功能
 
 - Player 註冊 / 登入
