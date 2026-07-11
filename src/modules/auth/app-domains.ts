@@ -31,3 +31,20 @@ export function resolveAppByReferer(referer: string | undefined): AppDomainConfi
 
   return loadAppDomainTable()[host];
 }
+
+// 給 CORS middleware 用(ticket #29):AUTH_APP_DOMAINS 裡每個 app 的 redirectUrl 網域部分,
+// 不重複、不新增獨立的 CORS env var,跟 resolveAppByReferer 共用同一份設定。
+export function listAppOrigins(): string[] {
+  const table = loadAppDomainTable();
+  const origins = new Set<string>();
+
+  for (const config of Object.values(table)) {
+    try {
+      origins.add(new URL(config.redirectUrl).origin);
+    } catch {
+      // 格式錯誤的 redirectUrl 忽略,跟 resolveAppByReferer 對 Referer 的處理一樣寬鬆。
+    }
+  }
+
+  return [...origins];
+}

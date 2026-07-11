@@ -1,4 +1,5 @@
 export { authRoutes } from "./routes.js";
+export { listAppOrigins } from "./app-domains.js";
 export {
   canPlayer,
   getPlayerByEmail,
