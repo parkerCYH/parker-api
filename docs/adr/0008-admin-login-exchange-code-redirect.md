@@ -8,3 +8,7 @@
 - 待審核(202 情境):沒有 token 要保護,直接導回 `${ADMIN_DASHBOARD_URL}/auth/callback?status=pending&userId=<uuid>`,`userId` 不是憑證,帶在 URL 沒有額外風險
 
 考慮過直接比照 Player 登入(ADR-0006)把 accessToken/refreshToken 當 query param 導回去,做法更簡單、跟既有模式一致。但 User 能碰到的資料範圍(透過 Admin Dashboard 管理全部 side project)比單一 Player 大得多,token 短暫出現在 URL 裡的風險(瀏覽器歷史、伺服器 access log、Referer header 外洩給第三方頁面)不值得用「省一支 API」去換,所以 User 登入採用比 Player 登入更保守的一次性 exchange code 模式。Player 登入維持原樣不變。
+
+## 附記(2026-07-11):cat-care 不比照加 server-side 這一層
+
+實測 cat-care(純 Vite SPA)串接時撞到 CORS error,曾討論過要不要幫 cat-care 也加一層像 Admin Dashboard 那樣的後端(伺服器對伺服器轉發,順便繞開 CORS)。結論是不加,原因就是上面這段——admin 會有這層,是因為 User 的資料風險等級比較高,不是因為「這樣比較不會遇到 CORS」。cat-care 是單一家庭範圍的健康記錄工具,風險等級跟 admin 不是同一量級,沒有新理由推翻「Player 登入維持原樣」這個決定。CORS 用正常的手段解——在 `parker-api` 自己的 API 上加 CORS 白名單(見 #29),不透過幫前端多蓋一台伺服器來繞過去。
