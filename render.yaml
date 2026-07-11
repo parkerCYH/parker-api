@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: parker-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    envVars:
+      - key: PORT
+        value: "3001"
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_REDIRECT_URI
+        sync: false
+      - key: ADMIN_GOOGLE_REDIRECT_URI
+        sync: false
+      - key: ADMIN_DASHBOARD_URL
+        sync: false
+      - key: SUPER_ADMIN_EMAILS
+        sync: false
+      - key: AUTH_APP_DOMAINS
+        sync: false

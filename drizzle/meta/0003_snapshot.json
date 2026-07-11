@@ -292,7 +292,7 @@
     },
     "auth.player_grants": {
       "name": "player_grants",
-      "schema": "auth",
+      "schema": "app_auth",
       "columns": {
         "id": {
           "name": "id",
@@ -329,7 +329,7 @@
             "player_id"
           ],
           "tableTo": "players",
-          "schemaTo": "auth",
+          "schemaTo": "app_auth",
           "columnsTo": [
             "id"
           ],
@@ -354,7 +354,7 @@
     },
     "auth.players": {
       "name": "players",
-      "schema": "auth",
+      "schema": "app_auth",
       "columns": {
         "id": {
           "name": "id",
@@ -426,7 +426,7 @@
     },
     "auth.refresh_tokens": {
       "name": "refresh_tokens",
-      "schema": "auth",
+      "schema": "app_auth",
       "columns": {
         "id": {
           "name": "id",
@@ -475,7 +475,7 @@
             "player_id"
           ],
           "tableTo": "players",
-          "schemaTo": "auth",
+          "schemaTo": "app_auth",
           "columnsTo": [
             "id"
           ],
@@ -740,7 +740,7 @@
   "enums": {},
   "schemas": {
     "admin": "admin",
-    "auth": "auth",
+    "app_auth": "app_auth",
     "cat_care": "cat_care"
   },
   "views": {},

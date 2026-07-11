@@ -9,6 +9,8 @@ RUN pnpm install --frozen-lockfile
 
 COPY . .
 
+RUN pnpm build
+
 EXPOSE 3001
 
-CMD ["pnpm", "dev"]
+CMD ["node", "dist/index.js"]

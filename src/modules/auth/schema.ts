@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { pgSchema, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
 
-export const authSchema = pgSchema("auth");
+export const authSchema = pgSchema("app_auth");
 
 export const players = authSchema.table("players", {
   id: uuid("id")

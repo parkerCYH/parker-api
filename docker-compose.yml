@@ -20,6 +20,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    command: pnpm dev
     ports:
       - "3001:3001"
     environment:

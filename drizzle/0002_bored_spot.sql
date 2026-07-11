@@ -41,6 +41,6 @@ ALTER TABLE "cat_care"."cat_players" ADD CONSTRAINT "cat_players_cat_id_cats_id_
 ALTER TABLE "cat_care"."weight_records" ADD CONSTRAINT "weight_records_cat_id_cats_id_fk" FOREIGN KEY ("cat_id") REFERENCES "cat_care"."cats"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 -- 跨 schema 外鍵指回 auth.players(見 CONTEXT.md「共用帳號機制」)。drizzle-kit 的 loader 不解析
 -- 跨 module 的相對路徑匯入,schema.ts 故意不用 Drizzle 的 .references() 宣告這幾條,手動補在這裡。
-ALTER TABLE "cat_care"."cat_players" ADD CONSTRAINT "cat_players_player_id_players_id_fk" FOREIGN KEY ("player_id") REFERENCES "auth"."players"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "cat_care"."bowel_movements" ADD CONSTRAINT "bowel_movements_recorded_by_players_id_fk" FOREIGN KEY ("recorded_by") REFERENCES "auth"."players"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "cat_care"."weight_records" ADD CONSTRAINT "weight_records_measured_by_players_id_fk" FOREIGN KEY ("measured_by") REFERENCES "auth"."players"("id") ON DELETE no action ON UPDATE no action;
+ALTER TABLE "cat_care"."cat_players" ADD CONSTRAINT "cat_players_player_id_players_id_fk" FOREIGN KEY ("player_id") REFERENCES "app_auth"."players"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "cat_care"."bowel_movements" ADD CONSTRAINT "bowel_movements_recorded_by_players_id_fk" FOREIGN KEY ("recorded_by") REFERENCES "app_auth"."players"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "cat_care"."weight_records" ADD CONSTRAINT "weight_records_measured_by_players_id_fk" FOREIGN KEY ("measured_by") REFERENCES "app_auth"."players"("id") ON DELETE no action ON UPDATE no action;
