@@ -3,7 +3,7 @@ import { desc, eq } from "drizzle-orm";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import app from "../../app.js";
 import { db } from "../../shared/db.js";
-import { grantAccess } from "../auth/index.js";
+import { verifyPlayerAccessToken } from "../auth/index.js";
 import { createRole } from "../rbac/index.js";
 import { updateUserRole } from "./repository.js";
 import { loginExchangeCodes } from "./schema.js";
@@ -143,14 +143,11 @@ async function loginPlayerWithCatCareAccess() {
     });
   }
 
-  const firstAttempt = await attemptPlayerLogin();
-  const { playerId } = (await firstAttempt.json()) as { playerId: string };
-
-  await grantAccess(playerId, "catCare.access");
-
-  const secondAttempt = await attemptPlayerLogin();
-  const location = secondAttempt.headers.get("location") ?? "";
+  // cat-care 登入即自動授權 catCare.access(ticket #28),第一次就會直接成功,不用先手動 grant。
+  const attempt = await attemptPlayerLogin();
+  const location = attempt.headers.get("location") ?? "";
   const accessToken = new URL(location).searchParams.get("accessToken") ?? "";
+  const { playerId } = await verifyPlayerAccessToken(accessToken);
 
   return { playerId, accessToken, profile: playerProfile };
 }

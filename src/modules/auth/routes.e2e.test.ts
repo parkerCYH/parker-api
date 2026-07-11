@@ -5,6 +5,10 @@ import { canPlayer, grantAccess } from "./index.js";
 
 const APP_REFERER = "http://test.cat-care.local/login";
 const APP_REDIRECT_URL = "http://test.cat-care.local/login/callback";
+// otherApp 不是 cat-care,<app>.access 仍要人工授予(ticket #28 只改 catCare 這一條分支)——
+// 用來測試「manual grant 仍然運作」的迴歸保護,cat-care 自己已經不會走到 forbidden_app 了。
+const OTHER_APP_REFERER = "http://test.other-app.local/login";
+const OTHER_APP_REDIRECT_URL = "http://test.other-app.local/login/callback";
 
 let currentProfile = makeGoogleProfile();
 
@@ -96,9 +100,9 @@ describe("auth routes", () => {
     expect(res.status).toBe(400);
   });
 
-  it("denies the callback and returns playerId when the Player lacks <app>.access", async () => {
+  it("denies the callback and returns playerId when the Player lacks <app>.access (otherApp, unaffected by ticket #28)", async () => {
     currentProfile = makeGoogleProfile();
-    const res = await attemptLogin();
+    const res = await attemptLogin(OTHER_APP_REFERER);
 
     expect(res.status).toBe(403);
     const body = (await res.json()) as ForbiddenResponse;
@@ -106,12 +110,25 @@ describe("auth routes", () => {
     expect(body.playerId).toEqual(expect.any(String));
   });
 
-  it("redirects back to the app's redirectUrl with tokens once <app>.access is granted", async () => {
+  it("redirects back to the app's redirectUrl with tokens once <app>.access is granted (otherApp)", async () => {
     currentProfile = makeGoogleProfile();
 
-    const firstAttempt = await attemptLogin();
+    const firstAttempt = await attemptLogin(OTHER_APP_REFERER);
     const { playerId } = (await firstAttempt.json()) as ForbiddenResponse;
-    await grantAccess(playerId, "catCare.access");
+    await grantAccess(playerId, "otherApp.access");
+
+    const res = await attemptLogin(OTHER_APP_REFERER);
+
+    expect(res.status).toBe(302);
+    const location = res.headers.get("location") ?? "";
+    expect(location.startsWith(OTHER_APP_REDIRECT_URL)).toBe(true);
+    const redirectParams = new URL(location).searchParams;
+    expect(redirectParams.get("accessToken")).toEqual(expect.any(String));
+    expect(redirectParams.get("refreshToken")).toEqual(expect.any(String));
+  });
+
+  it("auto-grants catCare.access on first cat-care login, no forbidden_app (ticket #28)", async () => {
+    currentProfile = makeGoogleProfile();
 
     const res = await attemptLogin();
 
@@ -185,10 +202,7 @@ describe("auth routes", () => {
   it("issues a new access token via refresh", async () => {
     currentProfile = makeGoogleProfile();
 
-    const firstAttempt = await attemptLogin();
-    const { playerId } = (await firstAttempt.json()) as ForbiddenResponse;
-    await grantAccess(playerId, "catCare.access");
-
+    // cat-care 登入即自動授權(ticket #28),不用先手動 grant 就能拿到 token。
     const loginRes = await attemptLogin();
     const location = loginRes.headers.get("location") ?? "";
     const refreshToken = new URL(location).searchParams.get("refreshToken") ?? "";
@@ -214,16 +228,16 @@ describe("auth routes", () => {
     expect(res.status).toBe(401);
   });
 
-  it("canPlayer reflects granted access rules", async () => {
+  it("canPlayer reflects granted access rules (otherApp, unaffected by ticket #28's auto-grant)", async () => {
     currentProfile = makeGoogleProfile();
 
-    const firstAttempt = await attemptLogin();
+    const firstAttempt = await attemptLogin(OTHER_APP_REFERER);
     const { playerId } = (await firstAttempt.json()) as ForbiddenResponse;
 
-    expect(await canPlayer(playerId, "catCare.access")).toBe(false);
+    expect(await canPlayer(playerId, "otherApp.access")).toBe(false);
 
-    await grantAccess(playerId, "catCare.access");
+    await grantAccess(playerId, "otherApp.access");
 
-    expect(await canPlayer(playerId, "catCare.access")).toBe(true);
+    expect(await canPlayer(playerId, "otherApp.access")).toBe(true);
   });
 });

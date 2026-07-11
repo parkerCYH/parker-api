@@ -64,12 +64,21 @@ async function attemptLogin(referer: string) {
   });
 }
 
-// 先登入一次(必然被擋,因為還沒有任何 app 的權限)拿到 playerId,granting 之後的規則,
-// 再登入一次拿到真正的 token——跟 auth/admin module 的 e2e 測試同一套模式(ADR-0006)。
+// 先登入一次拿到 playerId,granting 之後的規則,再登入一次拿到真正的 token——跟
+// auth/admin module 的 e2e 測試同一套模式(ADR-0006)。cat-care 登入即自動授權
+// catCare.access(ticket #28)之後,第一次就會直接成功,不會被擋,所以這裡要能處理
+// 兩種結果:403(該 app 仍要人工授予,例如 otherApp)或直接 302 成功。
 async function loginPlayer(profile: typeof AUTHORIZED_PROFILE, referer: string, rule: string) {
   currentProfile = profile;
 
   const first = await attemptLogin(referer);
+
+  if (first.status !== 403) {
+    const location = first.headers.get("location") ?? "";
+    const params = new URL(location).searchParams;
+    return { accessToken: params.get("accessToken") ?? "", playerId: "" };
+  }
+
   const { playerId } = (await first.json()) as ForbiddenLoginResponse;
   await grantAccess(playerId, rule);
 

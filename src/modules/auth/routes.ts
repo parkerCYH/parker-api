@@ -3,7 +3,7 @@ import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { resolveAppByReferer } from "./app-domains.js";
 import { buildGoogleAuthUrl, exchangeGoogleCode } from "./google-oauth.js";
-import { canPlayer, findOrCreatePlayer, issueSession, refreshSession } from "./service.js";
+import { canPlayer, findOrCreatePlayer, grantAccess, issueSession, refreshSession } from "./service.js";
 
 const STATE_COOKIE = "auth_oauth_state";
 
@@ -144,6 +144,13 @@ authRoutes.openapi(googleCallbackRoute, async (c) => {
   }
 
   const player = await findOrCreatePlayer(profile);
+
+  // cat-care 沒有任何管道能發 catCare.access(見 docs/services/auth.md「cat-care 登入即自動
+  // 授權」),登入即自動授權——grantAccess 本身 onConflictDoNothing,天生 idempotent,不用先查。
+  // 只影響這個 app;其他 app 的 <app>.access 仍要人工授予。
+  if (payload.app === "catCare") {
+    await grantAccess(player.id, "catCare.access");
+  }
 
   if (!(await canPlayer(player.id, `${payload.app}.access`))) {
     return c.json({ error: "forbidden_app", playerId: player.id }, 403);
