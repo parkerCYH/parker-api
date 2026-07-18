@@ -19,14 +19,10 @@ Finds the next open ticket on the active wayfinder map, implements it fully (sch
 1. `gh issue edit <n> --add-assignee @me` before touching anything — that's the claim.
 2. Implement the full vertical slice per `docs/adr/0004-module-structure-and-e2e-testing.md`: `schema.ts` → `repository.ts` → `service.ts` → `routes.ts` → `index.ts`. Only `index.ts` is importable by other modules — respect that boundary even under time pressure.
 3. `pnpm exec tsc --noEmit` after every meaningful edit, not just at the end. Catch drift early.
-4. Migrations: `drizzle-kit generate`, then hand-inspect the output before applying. Two known gotchas in this codebase:
-   - **Cross-module foreign keys**: drizzle-kit's loader can't resolve relative imports across module boundaries (a `.js` specifier pointing at another module's `.ts` source). Declare the column as a plain `uuid(...)` with no `.references()`, and hand-append the real `ALTER TABLE ... ADD CONSTRAINT ... FOREIGN KEY` to the generated SQL.
-   - **CASCADE double-drops**: when a generated migration does `DROP TABLE ... CASCADE`, it can also separately emit a `DROP CONSTRAINT` for something the CASCADE already removed — that second statement errors. Read the generated SQL before trusting it.
-   - Data-only migrations (seeding roles, rules, backfills) use `drizzle-kit generate --custom` and get hand-written SQL.
-   - Apply to **both** `parker_api` and `parker_api_test` — don't forget the test database, and don't be afraid to drop and recreate `parker_api_test` from scratch if accumulated test data violates a new constraint (it's disposable, unlike the dev database).
+4. Migrations: `drizzle-kit generate`, then hand-inspect the output before applying. See [docs/operations.md](../../docs/operations.md) for this codebase's migration gotchas (cross-module foreign keys, CASCADE double-drops, data-only migrations, applying to both databases).
 5. Write e2e tests colocated with the module (`routes.e2e.test.ts`), hitting real Postgres via `app.request()`, per ADR-0004. No mocking the database. External third parties (Google's OAuth endpoints) are fair game to stub at the `fetch` boundary — that's not the same thing as mocking the DB.
 6. `pnpm test` green before moving on.
-7. **Verify against the actual running stack, not just tests passing.** `docker compose up -d --build`, curl `/health` and the new routes, check `/openapi.json` for the expected paths. Tests can pass while wiring into `app.ts` or `docker-compose.yml` env vars is still missing.
+7. **Verify against the actual running stack, not just tests passing.** See [docs/operations.md](../../docs/operations.md) for the manual verification steps. Tests can pass while wiring into `app.ts` or `docker-compose.yml` env vars is still missing.
 8. If you add test infrastructure that's supposed to catch a class of bug (e.g. a static-scan test), **prove it actually catches that bug** — inject the violation, watch it fail, revert, watch it pass again. Don't trust "it compiled" as evidence a test works.
 
 ## Resolving a ticket
