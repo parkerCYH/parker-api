@@ -11,7 +11,8 @@ Finds the next open ticket on the active wayfinder map, implements it fully (sch
 1. **Sync git state before assuming anything.** `git fetch origin main`, compare `origin/main..HEAD` and `HEAD..origin/main`. Multiple sessions share this repo; don't trust memory of where things stood.
 2. **Load the map, not just the last ticket.** The active implementation map is [#9](https://github.com/parkerCYH/parker-api/issues/9). Read its body (Destination / Notes / Decisions so far), then query its open child issues — that's the frontier.
 3. **Check for new tickets, not just the ones you remember.** Other sessions (planning, frontend-integration) file new child issues on the same map after finding gaps or making new decisions. "Is there anything left" means re-querying GitHub, not re-reading your own last message.
-4. **Read every doc a ticket references before writing code.** ADRs and `docs/services/*.md` are the spec. If a ticket cites an ADR you haven't read this session, read it first.
+4. **Once the frontier is known, ask which ticket to work — don't auto-pick.** List the open/ready tickets found and use AskUserQuestion (or plain text if that tool isn't available) to ask the user which one to work on next. Never start implementing the first one found without an explicit answer, even if only one ticket is open.
+5. **Read every doc a ticket references before writing code.** ADRs and `docs/services/*.md` are the spec. If a ticket cites an ADR you haven't read this session, read it first.
 
 ## Working a ticket
 

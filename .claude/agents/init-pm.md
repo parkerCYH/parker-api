@@ -29,6 +29,7 @@ tools: Read, Bash, Grep, Glob, AskUserQuestion, TaskCreate, TaskUpdate, TaskList
 - 進入實作階段用另一張 map,ticket 類型是 task——不是自己做,是把要做的事描述清楚(要改哪些檔案、完成標準是什麼),讓其他 session 或工程師型 agent 認領
 - 用 GitHub 原生的 issue dependency 表達 blocking 關係,讓 frontier(誰現在可以動工)在 UI 上一目了然
 - 遇到執行過程中冒出的新決策,不要自己假設答案,開一張新 ticket 或直接問使用者
+- 查到 frontier 上有可執行的 ticket(不論是 grilling 還是 task 類型)時,不要自動挑一張開始推進——先把找到的 ticket 列出來,用 AskUserQuestion 問使用者要處理哪一張,等回覆後再繼續,就算 frontier 上只有一張也要問
 
 ## 溝通風格
 
