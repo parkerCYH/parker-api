@@ -7,6 +7,8 @@ export const catCareSchema = pgSchema("cat_care");
 // constraint(ticket #27)——實際驗證在 routes.ts 的 z.enum 做。
 export type StoolType = "normal" | "hard" | "soft" | "watery" | "bloody" | "mucous";
 export type Method = "catScale" | "holdAndSubtract" | "other";
+export type FluidSite = "left" | "right" | "nape" | "other";
+export type FluidType = "normalSaline" | "lactatedRingers" | "other";
 
 // player_id/recorded_by/measured_by 都指回 auth.players.id(見 CONTEXT.md「共用帳號機制」的
 // 跨 schema 外鍵慣例),但這裡刻意不用 Drizzle 的 .references() 匯入 auth/schema.ts——
@@ -67,6 +69,24 @@ export const weightRecords = catCareSchema.table("weight_records", {
   measuredAt: timestamp("measured_at", { withTimezone: true }).notNull(),
   weightGrams: integer("weight_grams").notNull(),
   method: text("method").$type<Method>(),
+  notes: text("notes"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const fluidInjections = catCareSchema.table("fluid_injections", {
+  id: uuid("id")
+    .primaryKey()
+    .$defaultFn(() => randomUUID()),
+  catId: uuid("cat_id")
+    .notNull()
+    .references(() => cats.id, { onDelete: "cascade" }),
+  injectedBy: uuid("injected_by").notNull(),
+  injectedAt: timestamp("injected_at", { withTimezone: true }).notNull(),
+  site: text("site").notNull().$type<FluidSite>(),
+  siteOther: text("site_other"),
+  volumeMl: integer("volume_ml").notNull(),
+  fluidType: text("fluid_type").notNull().$type<FluidType>(),
+  fluidTypeOther: text("fluid_type_other"),
   notes: text("notes"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });

@@ -6,6 +6,7 @@ import {
   listAllCats,
   listBowelMovements,
   listCatCarePlayers,
+  listFluidInjections,
   listWeightRecords,
 } from "../cat-care/index.js";
 import {
@@ -530,6 +531,20 @@ const weightRecordSchema = z.object({
   createdAt: z.string(),
 });
 
+const fluidInjectionSchema = z.object({
+  id: z.string().uuid(),
+  catId: z.string().uuid(),
+  injectedBy: z.string().uuid(),
+  injectedAt: z.string(),
+  site: z.string(),
+  siteOther: z.string().nullable().optional(),
+  volumeMl: z.number(),
+  fluidType: z.string(),
+  fluidTypeOther: z.string().nullable().optional(),
+  notes: z.string().nullable().optional(),
+  createdAt: z.string(),
+});
+
 const playerProfileSchema = z.object({
   id: z.string().uuid(),
   email: z.string().email(),
@@ -655,6 +670,45 @@ adminRoutes.openapi(catCareCatWeightRecordsRoute, async (c) => {
   }
 
   const records = await listWeightRecords(catId);
+  return c.json(records, 200);
+});
+
+const catCareCatFluidInjectionsRoute = createRoute({
+  method: "get",
+  path: "/cat-care/cats/{catId}/fluid-injections",
+  tags: ["admin"],
+  summary: "Gateway: a cat's fluid injection history (requires admin.catCare.viewAll)",
+  request: { params: catIdParamSchema },
+  responses: {
+    200: {
+      description: "History",
+      content: { "application/json": { schema: z.array(fluidInjectionSchema) } },
+    },
+    401: {
+      description: "Missing or invalid caller access token",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    403: {
+      description: "Caller lacks admin.catCare.viewAll",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    404: {
+      description: "Cat not found",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+  },
+});
+
+adminRoutes.openapi(catCareCatFluidInjectionsRoute, async (c) => {
+  const guard = await requireCatCareViewer(c);
+  if (!guard.ok) return c.json({ error: guard.error }, guard.status);
+
+  const { catId } = c.req.valid("param");
+  if (!(await getCat(catId))) {
+    return c.json({ error: "not_found" }, 404);
+  }
+
+  const records = await listFluidInjections(catId);
   return c.json(records, 200);
 });
 

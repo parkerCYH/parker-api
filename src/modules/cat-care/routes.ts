@@ -48,6 +48,64 @@ const weightRecordSchema = z.object({
   createdAt: z.string(),
 });
 
+// 比照 stoolType/method,英文 key 用完整單字而非縮寫(票 01 定案)。
+const fluidSiteSchema = z.enum(["left", "right", "nape", "other"]);
+const fluidTypeSchema = z.enum(["normalSaline", "lactatedRingers", "other"]);
+
+const fluidInjectionSchema = z.object({
+  id: z.string().uuid(),
+  catId: z.string().uuid(),
+  injectedBy: z.string().uuid(),
+  injectedAt: z.string(),
+  site: fluidSiteSchema,
+  siteOther: z.string().nullable().optional(),
+  volumeMl: z.number(),
+  fluidType: fluidTypeSchema,
+  fluidTypeOther: z.string().nullable().optional(),
+  notes: z.string().nullable().optional(),
+  createdAt: z.string(),
+});
+
+// site='other'/fluidType='other' 時對應的自由文字欄位必填,非 other 時帶值直接拒絕(票 01 定案)。
+const createFluidInjectionBodySchema = z
+  .object({
+    injectedAt: z.string().datetime().optional(),
+    site: fluidSiteSchema,
+    siteOther: z.string().min(1).optional(),
+    volumeMl: z.number().int().positive(),
+    fluidType: fluidTypeSchema,
+    fluidTypeOther: z.string().min(1).optional(),
+    notes: z.string().optional(),
+  })
+  .refine((body) => body.site === "other" || body.siteOther === undefined, {
+    message: "siteOther must not be set unless site is 'other'",
+    path: ["siteOther"],
+  })
+  .refine((body) => body.site !== "other" || Boolean(body.siteOther), {
+    message: "siteOther is required when site is 'other'",
+    path: ["siteOther"],
+  })
+  .refine((body) => body.fluidType === "other" || body.fluidTypeOther === undefined, {
+    message: "fluidTypeOther must not be set unless fluidType is 'other'",
+    path: ["fluidTypeOther"],
+  })
+  .refine((body) => body.fluidType !== "other" || Boolean(body.fluidTypeOther), {
+    message: "fluidTypeOther is required when fluidType is 'other'",
+    path: ["fluidTypeOther"],
+  });
+
+// PATCH 是部分更新,site/fluidType 的 other 一致性要合併既有紀錄才能判斷,交給 service 層驗證
+// (見 service.ts 的 resolveOtherField),這裡只驗證各欄位本身的型別/格式。
+const updateFluidInjectionBodySchema = z.object({
+  injectedAt: z.string().datetime().optional(),
+  site: fluidSiteSchema.optional(),
+  siteOther: z.string().min(1).optional(),
+  volumeMl: z.number().int().positive().optional(),
+  fluidType: fluidTypeSchema.optional(),
+  fluidTypeOther: z.string().min(1).optional(),
+  notes: z.string().optional(),
+});
+
 const invitedPlayerSchema = z.object({
   id: z.string().uuid(),
   email: z.string().email(),
@@ -569,6 +627,163 @@ catCareRoutes.openapi(deleteWeightRecordRoute, async (c) => {
 
   const { catId, id } = c.req.valid("param");
   const result = await service.deleteWeightRecord(catId, id, auth.playerId);
+  if (result.kind === "not_found") return c.json({ error: "not_found" }, 404);
+  if (result.kind === "forbidden") return c.json({ error: "forbidden" }, 403);
+  return c.body(null, 204);
+});
+
+const createFluidInjectionRoute = createRoute({
+  method: "post",
+  path: "/cats/{catId}/fluid-injections",
+  tags: ["cat-care"],
+  summary: "Record a subcutaneous fluid injection for a cat",
+  request: {
+    params: catIdParamSchema,
+    body: { content: { "application/json": { schema: createFluidInjectionBodySchema } } },
+  },
+  responses: {
+    201: { description: "Recorded", content: { "application/json": { schema: fluidInjectionSchema } } },
+    401: {
+      description: "Missing or invalid access token",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    403: {
+      description: "Player lacks catCare.access",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    404: {
+      description: "Cat not found or caller is not a member",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+  },
+});
+
+catCareRoutes.openapi(createFluidInjectionRoute, async (c) => {
+  const auth = await authenticatePlayer(c);
+  if (!auth.ok) return c.json({ error: auth.error }, auth.status);
+
+  const { catId } = c.req.valid("param");
+  if (!(await service.isCatMember(catId, auth.playerId))) {
+    return c.json({ error: "not_found" }, 404);
+  }
+
+  const body = c.req.valid("json");
+  const record = await service.recordFluidInjection(catId, auth.playerId, body);
+  return c.json(record, 201);
+});
+
+const listFluidInjectionsRoute = createRoute({
+  method: "get",
+  path: "/cats/{catId}/fluid-injections",
+  tags: ["cat-care"],
+  summary: "List fluid injection history for a cat (optionally filtered by ?from=&to= date range)",
+  request: { params: catIdParamSchema, query: historyQuerySchema },
+  responses: {
+    200: {
+      description: "History",
+      content: { "application/json": { schema: z.array(fluidInjectionSchema) } },
+    },
+    401: {
+      description: "Missing or invalid access token",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    403: {
+      description: "Player lacks catCare.access",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    404: {
+      description: "Cat not found or caller is not a member",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+  },
+});
+
+catCareRoutes.openapi(listFluidInjectionsRoute, async (c) => {
+  const auth = await authenticatePlayer(c);
+  if (!auth.ok) return c.json({ error: auth.error }, auth.status);
+
+  const { catId } = c.req.valid("param");
+  if (!(await service.isCatMember(catId, auth.playerId))) {
+    return c.json({ error: "not_found" }, 404);
+  }
+
+  const { from, to } = c.req.valid("query");
+  const records = await service.listFluidInjections(catId, { from, to });
+  return c.json(records, 200);
+});
+
+const updateFluidInjectionRoute = createRoute({
+  method: "patch",
+  path: "/cats/{catId}/fluid-injections/{id}",
+  tags: ["cat-care"],
+  summary: "Edit a fluid injection record (only the injecting Player may edit)",
+  request: {
+    params: catRecordParamSchema,
+    body: { content: { "application/json": { schema: updateFluidInjectionBodySchema } } },
+  },
+  responses: {
+    200: { description: "Updated", content: { "application/json": { schema: fluidInjectionSchema } } },
+    400: {
+      description: "site/fluidType 'other' free-text field is missing or set when not allowed",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    401: {
+      description: "Missing or invalid access token",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    403: {
+      description: "Player lacks catCare.access, or is not the original injector",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    404: {
+      description: "Record not found for this cat",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+  },
+});
+
+catCareRoutes.openapi(updateFluidInjectionRoute, async (c) => {
+  const auth = await authenticatePlayer(c);
+  if (!auth.ok) return c.json({ error: auth.error }, auth.status);
+
+  const { catId, id } = c.req.valid("param");
+  const body = c.req.valid("json");
+  const result = await service.updateFluidInjection(catId, id, auth.playerId, body);
+  if (result.kind === "not_found") return c.json({ error: "not_found" }, 404);
+  if (result.kind === "forbidden") return c.json({ error: "forbidden" }, 403);
+  if (result.kind === "invalid") return c.json({ error: result.message }, 400);
+  return c.json(result.record, 200);
+});
+
+const deleteFluidInjectionRoute = createRoute({
+  method: "delete",
+  path: "/cats/{catId}/fluid-injections/{id}",
+  tags: ["cat-care"],
+  summary: "Hard-delete a fluid injection record (only the injecting Player may delete)",
+  request: { params: catRecordParamSchema },
+  responses: {
+    204: { description: "Deleted" },
+    401: {
+      description: "Missing or invalid access token",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    403: {
+      description: "Player lacks catCare.access, or is not the original injector",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    404: {
+      description: "Record not found for this cat",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+  },
+});
+
+catCareRoutes.openapi(deleteFluidInjectionRoute, async (c) => {
+  const auth = await authenticatePlayer(c);
+  if (!auth.ok) return c.json({ error: auth.error }, auth.status);
+
+  const { catId, id } = c.req.valid("param");
+  const result = await service.deleteFluidInjection(catId, id, auth.playerId);
   if (result.kind === "not_found") return c.json({ error: "not_found" }, 404);
   if (result.kind === "forbidden") return c.json({ error: "forbidden" }, 403);
   return c.body(null, 204);

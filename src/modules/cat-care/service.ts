@@ -1,6 +1,6 @@
 import { canPlayer, getPlayerByEmail, getPlayerProfile, listPlayersWithAccess } from "../auth/index.js";
 import * as repo from "./repository.js";
-import type { Method, StoolType } from "./schema.js";
+import type { FluidSite, FluidType, Method, StoolType } from "./schema.js";
 
 export async function createCat(
   playerId: string,
@@ -207,6 +207,144 @@ export async function deleteWeightRecord(
   if (record.measuredBy !== playerId) return { kind: "forbidden" };
 
   await repo.deleteWeightRecord(recordId);
+  return { kind: "ok" };
+}
+
+export async function recordFluidInjection(
+  catId: string,
+  playerId: string,
+  input: {
+    injectedAt?: string;
+    site: FluidSite;
+    siteOther?: string;
+    volumeMl: number;
+    fluidType: FluidType;
+    fluidTypeOther?: string;
+    notes?: string;
+  },
+) {
+  return repo.createFluidInjection({
+    catId,
+    injectedBy: playerId,
+    injectedAt: input.injectedAt ? new Date(input.injectedAt) : new Date(),
+    site: input.site,
+    siteOther: input.siteOther,
+    volumeMl: input.volumeMl,
+    fluidType: input.fluidType,
+    fluidTypeOther: input.fluidTypeOther,
+    notes: input.notes,
+  });
+}
+
+// 支援 ?from=&to= 日期區間篩選(比照 bowel/weight)。
+export async function listFluidInjections(catId: string, range?: { from?: string; to?: string }) {
+  return repo.listFluidInjections(catId, {
+    from: range?.from ? new Date(range.from) : undefined,
+    to: range?.to ? new Date(range.to) : undefined,
+  });
+}
+
+type OtherFieldResolution =
+  | { kind: "ok"; patch?: string | null }
+  | { kind: "invalid"; message: string };
+
+// site='other'/fluidType='other' 時對應的自由文字欄位必填,非 other 時帶值直接拒絕(票 01 定案)。
+// PATCH 是部分更新,判斷「有效值」要合併既有紀錄——切走 other 時自動清掉殘留的舊自由文字,
+// 不要求呼叫端額外傳 null 才能清空。
+function resolveOtherField(args: {
+  enumChanging: boolean;
+  isOther: boolean;
+  inputOther: string | undefined;
+  existingOther: string | null;
+  fieldLabel: string;
+}): OtherFieldResolution {
+  const { enumChanging, isOther, inputOther, existingOther, fieldLabel } = args;
+
+  if (isOther) {
+    const effectiveOther = inputOther ?? existingOther ?? undefined;
+    if (!effectiveOther) {
+      return { kind: "invalid", message: `${fieldLabel} is required when the value is 'other'` };
+    }
+    return { kind: "ok", patch: inputOther };
+  }
+
+  if (inputOther !== undefined) {
+    return { kind: "invalid", message: `${fieldLabel} must not be set unless the value is 'other'` };
+  }
+
+  if (enumChanging && existingOther !== null) {
+    return { kind: "ok", patch: null };
+  }
+
+  return { kind: "ok" };
+}
+
+export type UpdateFluidInjectionResult =
+  | { kind: "ok"; record: NonNullable<Awaited<ReturnType<typeof repo.updateFluidInjection>>> }
+  | { kind: "not_found" }
+  | { kind: "forbidden" }
+  | { kind: "invalid"; message: string };
+
+// PATCH /cats/{catId}/fluid-injections/{id}:只有當初 injected_by 本人能編輯。
+export async function updateFluidInjection(
+  catId: string,
+  recordId: string,
+  playerId: string,
+  input: {
+    injectedAt?: string;
+    site?: FluidSite;
+    siteOther?: string;
+    volumeMl?: number;
+    fluidType?: FluidType;
+    fluidTypeOther?: string;
+    notes?: string;
+  },
+): Promise<UpdateFluidInjectionResult> {
+  const record = await repo.findFluidInjectionById(recordId);
+  if (!record || record.catId !== catId) return { kind: "not_found" };
+  if (record.injectedBy !== playerId) return { kind: "forbidden" };
+
+  const siteResolution = resolveOtherField({
+    enumChanging: input.site !== undefined,
+    isOther: (input.site ?? record.site) === "other",
+    inputOther: input.siteOther,
+    existingOther: record.siteOther,
+    fieldLabel: "siteOther",
+  });
+  if (siteResolution.kind === "invalid") return siteResolution;
+
+  const fluidTypeResolution = resolveOtherField({
+    enumChanging: input.fluidType !== undefined,
+    isOther: (input.fluidType ?? record.fluidType) === "other",
+    inputOther: input.fluidTypeOther,
+    existingOther: record.fluidTypeOther,
+    fieldLabel: "fluidTypeOther",
+  });
+  if (fluidTypeResolution.kind === "invalid") return fluidTypeResolution;
+
+  const updated = await repo.updateFluidInjection(recordId, {
+    ...(input.injectedAt !== undefined ? { injectedAt: new Date(input.injectedAt) } : {}),
+    ...(input.site !== undefined ? { site: input.site } : {}),
+    ...(siteResolution.patch !== undefined ? { siteOther: siteResolution.patch } : {}),
+    ...(input.volumeMl !== undefined ? { volumeMl: input.volumeMl } : {}),
+    ...(input.fluidType !== undefined ? { fluidType: input.fluidType } : {}),
+    ...(fluidTypeResolution.patch !== undefined ? { fluidTypeOther: fluidTypeResolution.patch } : {}),
+    ...(input.notes !== undefined ? { notes: input.notes } : {}),
+  });
+  return { kind: "ok", record: updated };
+}
+
+// DELETE /cats/{catId}/fluid-injections/{id}:hard delete,限 injected_by 本人。
+export async function deleteFluidInjection(
+  catId: string,
+  recordId: string,
+  playerId: string,
+): Promise<DeleteResult> {
+  const record = await repo.findFluidInjectionById(recordId);
+  if (!record || record.catId !== catId) return { kind: "not_found" };
+  if (record.injectedBy !== playerId) return { kind: "forbidden" };
+
+  await repo.deleteFluidInjection(recordId);
   return { kind: "ok" };
 }
 

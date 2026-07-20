@@ -955,4 +955,239 @@ describe("cat-care routes", () => {
     });
     expect(badMethodRes.status).toBe(400);
   });
+
+  it("records and lists fluid injections for a cat, with date-range filtering (ticket #02)", async () => {
+    const createRes = await app.request("/api/v1/cat-care/cats", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${authorizedToken}`,
+      },
+      body: JSON.stringify({ name: "Fluid Injection Test Cat" }),
+    });
+    const cat = (await createRes.json()) as CatResponse;
+
+    const oldDate = "2020-01-01T00:00:00.000Z";
+    const recentDate = "2026-06-01T00:00:00.000Z";
+
+    await app.request(`/api/v1/cat-care/cats/${cat.id}/fluid-injections`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${authorizedToken}`,
+      },
+      body: JSON.stringify({
+        injectedAt: oldDate,
+        site: "left",
+        volumeMl: 80,
+        fluidType: "normalSaline",
+      }),
+    });
+    const recentRes = await app.request(`/api/v1/cat-care/cats/${cat.id}/fluid-injections`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${authorizedToken}`,
+      },
+      body: JSON.stringify({
+        injectedAt: recentDate,
+        site: "nape",
+        volumeMl: 100,
+        fluidType: "lactatedRingers",
+      }),
+    });
+    expect(recentRes.status).toBe(201);
+    const recentRecord = (await recentRes.json()) as { volumeMl: number; site: string };
+    expect(recentRecord.volumeMl).toBe(100);
+    expect(recentRecord.site).toBe("nape");
+
+    const listRes = await app.request(
+      `/api/v1/cat-care/cats/${cat.id}/fluid-injections?from=2025-01-01&to=2026-12-31`,
+      { headers: { authorization: `Bearer ${authorizedToken}` } },
+    );
+    expect(listRes.status).toBe(200);
+    const records = (await listRes.json()) as Array<{ volumeMl: number }>;
+    expect(records.some((r) => r.volumeMl === 100)).toBe(true);
+    expect(records.some((r) => r.volumeMl === 80)).toBe(false);
+  });
+
+  it("requires siteOther/fluidTypeOther when 'other' is picked, and rejects them otherwise (ticket #02)", async () => {
+    const createRes = await app.request("/api/v1/cat-care/cats", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${authorizedToken}`,
+      },
+      body: JSON.stringify({ name: "Fluid Injection Validation Cat" }),
+    });
+    const cat = (await createRes.json()) as CatResponse;
+
+    const missingSiteOtherRes = await app.request(`/api/v1/cat-care/cats/${cat.id}/fluid-injections`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${authorizedToken}`,
+      },
+      body: JSON.stringify({ site: "other", volumeMl: 50, fluidType: "normalSaline" }),
+    });
+    expect(missingSiteOtherRes.status).toBe(400);
+
+    const strayFluidTypeOtherRes = await app.request(
+      `/api/v1/cat-care/cats/${cat.id}/fluid-injections`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${authorizedToken}`,
+        },
+        body: JSON.stringify({
+          site: "left",
+          volumeMl: 50,
+          fluidType: "normalSaline",
+          fluidTypeOther: "shouldn't be here",
+        }),
+      },
+    );
+    expect(strayFluidTypeOtherRes.status).toBe(400);
+
+    const okRes = await app.request(`/api/v1/cat-care/cats/${cat.id}/fluid-injections`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${authorizedToken}`,
+      },
+      body: JSON.stringify({
+        site: "other",
+        siteOther: "belly",
+        volumeMl: 50,
+        fluidType: "other",
+        fluidTypeOther: "custom mix",
+      }),
+    });
+    expect(okRes.status).toBe(201);
+    const record = (await okRes.json()) as { siteOther: string; fluidTypeOther: string };
+    expect(record.siteOther).toBe("belly");
+    expect(record.fluidTypeOther).toBe("custom mix");
+
+    const badSiteRes = await app.request(`/api/v1/cat-care/cats/${cat.id}/fluid-injections`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${authorizedToken}`,
+      },
+      body: JSON.stringify({ site: "not-a-real-site", volumeMl: 50, fluidType: "normalSaline" }),
+    });
+    expect(badSiteRes.status).toBe(400);
+  });
+
+  it("lets only the injecting Player edit or hard-delete a fluid injection (ticket #02)", async () => {
+    const createRes = await app.request("/api/v1/cat-care/cats", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${authorizedToken}`,
+      },
+      body: JSON.stringify({ name: "Fluid Injection Edit/Delete Cat" }),
+    });
+    const cat = (await createRes.json()) as CatResponse;
+
+    const recordRes = await app.request(`/api/v1/cat-care/cats/${cat.id}/fluid-injections`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${authorizedToken}`,
+      },
+      body: JSON.stringify({ site: "left", volumeMl: 80, fluidType: "normalSaline" }),
+    });
+    const record = (await recordRes.json()) as { id: string };
+
+    const otherMember = await newCatCarePlayer("fluid-edit-delete-other");
+    await app.request(`/api/v1/cat-care/cats/${cat.id}/players`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${authorizedToken}`,
+      },
+      body: JSON.stringify({ email: otherMember.profile.email }),
+    });
+
+    const forbiddenEditRes = await app.request(
+      `/api/v1/cat-care/cats/${cat.id}/fluid-injections/${record.id}`,
+      {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${otherMember.accessToken}`,
+        },
+        body: JSON.stringify({ volumeMl: 999 }),
+      },
+    );
+    expect(forbiddenEditRes.status).toBe(403);
+
+    // 從 left 切到 other 卻沒補 siteOther:合併既有紀錄後仍不合法,回 400
+    const invalidSwitchRes = await app.request(
+      `/api/v1/cat-care/cats/${cat.id}/fluid-injections/${record.id}`,
+      {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${authorizedToken}`,
+        },
+        body: JSON.stringify({ site: "other" }),
+      },
+    );
+    expect(invalidSwitchRes.status).toBe(400);
+
+    const editRes = await app.request(
+      `/api/v1/cat-care/cats/${cat.id}/fluid-injections/${record.id}`,
+      {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${authorizedToken}`,
+        },
+        body: JSON.stringify({ site: "other", siteOther: "tail base", volumeMl: 90 }),
+      },
+    );
+    expect(editRes.status).toBe(200);
+    const updated = (await editRes.json()) as { site: string; siteOther: string; volumeMl: number };
+    expect(updated.site).toBe("other");
+    expect(updated.siteOther).toBe("tail base");
+    expect(updated.volumeMl).toBe(90);
+
+    // 切回非 other 的部位:後端自動清掉殘留的 siteOther,不需要呼叫端額外傳 null
+    const switchBackRes = await app.request(
+      `/api/v1/cat-care/cats/${cat.id}/fluid-injections/${record.id}`,
+      {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${authorizedToken}`,
+        },
+        body: JSON.stringify({ site: "right" }),
+      },
+    );
+    expect(switchBackRes.status).toBe(200);
+    const switchedBack = (await switchBackRes.json()) as { site: string; siteOther: string | null };
+    expect(switchedBack.site).toBe("right");
+    expect(switchedBack.siteOther ?? null).toBeNull();
+
+    const forbiddenDeleteRes = await app.request(
+      `/api/v1/cat-care/cats/${cat.id}/fluid-injections/${record.id}`,
+      { method: "DELETE", headers: { authorization: `Bearer ${otherMember.accessToken}` } },
+    );
+    expect(forbiddenDeleteRes.status).toBe(403);
+
+    const deleteRes = await app.request(
+      `/api/v1/cat-care/cats/${cat.id}/fluid-injections/${record.id}`,
+      { method: "DELETE", headers: { authorization: `Bearer ${authorizedToken}` } },
+    );
+    expect(deleteRes.status).toBe(204);
+
+    const secondDeleteRes = await app.request(
+      `/api/v1/cat-care/cats/${cat.id}/fluid-injections/${record.id}`,
+      { method: "DELETE", headers: { authorization: `Bearer ${authorizedToken}` } },
+    );
+    expect(secondDeleteRes.status).toBe(404);
+  });
 });

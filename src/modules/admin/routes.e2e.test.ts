@@ -647,6 +647,11 @@ describe("admin routes", () => {
       headers: { "content-type": "application/json", ...playerAuthHeader },
       body: JSON.stringify({ weightGrams: 4300 }),
     });
+    await app.request(`/api/v1/cat-care/cats/${cat.id}/fluid-injections`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...playerAuthHeader },
+      body: JSON.stringify({ site: "nape", volumeMl: 100, fluidType: "lactatedRingers" }),
+    });
 
     const detailRes = await app.request(`/api/v1/admin/cat-care/cats/${cat.id}`, {
       headers: adminAuthHeader,
@@ -668,6 +673,15 @@ describe("admin routes", () => {
     expect(weightRes.status).toBe(200);
     const weightRecords = (await weightRes.json()) as Array<{ weightGrams: number }>;
     expect(weightRecords.some((r) => r.weightGrams === 4300)).toBe(true);
+
+    const fluidRes = await app.request(`/api/v1/admin/cat-care/cats/${cat.id}/fluid-injections`, {
+      headers: adminAuthHeader,
+    });
+    expect(fluidRes.status).toBe(200);
+    const fluidRecords = (await fluidRes.json()) as Array<{ volumeMl: number; fluidType: string }>;
+    expect(fluidRecords.some((r) => r.volumeMl === 100 && r.fluidType === "lactatedRingers")).toBe(
+      true,
+    );
   });
 
   it("keeps an archived cat visible via the gateway, with archivedAt set (ticket #23)", async () => {

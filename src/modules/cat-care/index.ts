@@ -5,5 +5,6 @@ export {
   listAllCats,
   listBowelMovements,
   listCatCarePlayers,
+  listFluidInjections,
   listWeightRecords,
 } from "./service.js";

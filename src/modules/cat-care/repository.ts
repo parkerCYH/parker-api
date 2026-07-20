@@ -1,7 +1,7 @@
 import { and, desc, eq, gte, isNull, lte } from "drizzle-orm";
 import { db } from "../../shared/db.js";
-import { bowelMovements, catPlayers, cats, weightRecords } from "./schema.js";
-import type { Method, StoolType } from "./schema.js";
+import { bowelMovements, catPlayers, cats, fluidInjections, weightRecords } from "./schema.js";
+import type { FluidSite, FluidType, Method, StoolType } from "./schema.js";
 
 export async function createCat(input: {
   name: string;
@@ -209,6 +209,60 @@ export async function updateWeightRecord(
 // DELETE /cats/{catId}/weight-records/{id}(ticket #25):hard delete,單筆紀錄打錯直接刪。
 export async function deleteWeightRecord(id: string): Promise<void> {
   await db.delete(weightRecords).where(eq(weightRecords.id, id));
+}
+
+export async function createFluidInjection(input: {
+  catId: string;
+  injectedBy: string;
+  injectedAt: Date;
+  site: FluidSite;
+  siteOther?: string;
+  volumeMl: number;
+  fluidType: FluidType;
+  fluidTypeOther?: string;
+  notes?: string;
+}) {
+  const [row] = await db.insert(fluidInjections).values(input).returning();
+  return row;
+}
+
+// 支援 ?from=&to= 日期區間篩選 injected_at(比照 bowel/weight)。
+export async function listFluidInjections(catId: string, range?: { from?: Date; to?: Date }) {
+  const conditions = [eq(fluidInjections.catId, catId)];
+  if (range?.from) conditions.push(gte(fluidInjections.injectedAt, range.from));
+  if (range?.to) conditions.push(lte(fluidInjections.injectedAt, range.to));
+
+  return db
+    .select()
+    .from(fluidInjections)
+    .where(and(...conditions))
+    .orderBy(desc(fluidInjections.injectedAt));
+}
+
+export async function findFluidInjectionById(id: string) {
+  const [row] = await db.select().from(fluidInjections).where(eq(fluidInjections.id, id)).limit(1);
+  return row;
+}
+
+export async function updateFluidInjection(
+  id: string,
+  patch: {
+    injectedAt?: Date;
+    site?: FluidSite;
+    siteOther?: string | null;
+    volumeMl?: number;
+    fluidType?: FluidType;
+    fluidTypeOther?: string | null;
+    notes?: string;
+  },
+) {
+  const [row] = await db.update(fluidInjections).set(patch).where(eq(fluidInjections.id, id)).returning();
+  return row;
+}
+
+// DELETE /cats/{catId}/fluid-injections/{id}:hard delete,單筆紀錄打錯直接刪,限 injected_by 本人。
+export async function deleteFluidInjection(id: string): Promise<void> {
+  await db.delete(fluidInjections).where(eq(fluidInjections.id, id));
 }
 
 // 給 admin module 用(ticket #20):cat_players 裡出現過的所有 Player id(不重複)。
