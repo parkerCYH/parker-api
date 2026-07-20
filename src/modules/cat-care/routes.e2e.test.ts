@@ -680,7 +680,10 @@ describe("cat-care routes", () => {
     const cat = (await createRes.json()) as CatResponse;
 
     const oldDate = "2020-01-01T00:00:00.000Z";
-    const recentDate = "2026-06-01T00:00:00.000Z";
+    // 刻意用非 00:00 的時間,且跟下面查詢的 `to=2026-06-01` 同一天——用來驗證 `to` 篩選涵蓋
+    // 「當天結束」而非被誤判成「當天 00:00」(否則這筆會被 lte 濾掉,見 service.ts 的
+    // `endOfDayUtc` 註解)。
+    const recentDate = "2026-06-01T15:30:00.000Z";
 
     await app.request(`/api/v1/cat-care/cats/${cat.id}/bowel-movements`, {
       method: "POST",
@@ -717,7 +720,7 @@ describe("cat-care routes", () => {
     });
 
     const bowelRes = await app.request(
-      `/api/v1/cat-care/cats/${cat.id}/bowel-movements?from=2025-01-01&to=2026-12-31`,
+      `/api/v1/cat-care/cats/${cat.id}/bowel-movements?from=2025-01-01&to=2026-06-01`,
       { headers: { authorization: `Bearer ${authorizedToken}` } },
     );
     expect(bowelRes.status).toBe(200);
@@ -726,7 +729,7 @@ describe("cat-care routes", () => {
     expect(bowelRecords.some((r) => r.stoolType === "hard")).toBe(false);
 
     const weightRes = await app.request(
-      `/api/v1/cat-care/cats/${cat.id}/weight-records?from=2025-01-01&to=2026-12-31`,
+      `/api/v1/cat-care/cats/${cat.id}/weight-records?from=2025-01-01&to=2026-06-01`,
       { headers: { authorization: `Bearer ${authorizedToken}` } },
     );
     expect(weightRes.status).toBe(200);
@@ -968,7 +971,9 @@ describe("cat-care routes", () => {
     const cat = (await createRes.json()) as CatResponse;
 
     const oldDate = "2020-01-01T00:00:00.000Z";
-    const recentDate = "2026-06-01T00:00:00.000Z";
+    // 同上一組 bowel/weight 測試的理由:非 00:00 且跟 `to=2026-06-01` 同一天,驗證 `to` 篩選
+    // 涵蓋當天結束而非當天 00:00。
+    const recentDate = "2026-06-01T15:30:00.000Z";
 
     await app.request(`/api/v1/cat-care/cats/${cat.id}/fluid-injections`, {
       method: "POST",
@@ -1002,7 +1007,7 @@ describe("cat-care routes", () => {
     expect(recentRecord.site).toBe("nape");
 
     const listRes = await app.request(
-      `/api/v1/cat-care/cats/${cat.id}/fluid-injections?from=2025-01-01&to=2026-12-31`,
+      `/api/v1/cat-care/cats/${cat.id}/fluid-injections?from=2025-01-01&to=2026-06-01`,
       { headers: { authorization: `Bearer ${authorizedToken}` } },
     );
     expect(listRes.status).toBe(200);

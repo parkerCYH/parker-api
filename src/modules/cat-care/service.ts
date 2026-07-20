@@ -2,6 +2,13 @@ import { canPlayer, getPlayerByEmail, getPlayerProfile, listPlayersWithAccess } 
 import * as repo from "./repository.js";
 import type { FluidSite, FluidType, Method, StoolType } from "./schema.js";
 
+// `?to=` 是日期(YYYY-MM-DD),`new Date(dateOnly)` 會解析成當天 UTC 00:00,而不是當天結束——
+// 直接拿去跟 timestamptz 欄位做 lte 比較會把當天 00:00 之後的紀錄全部濾掉。統一補上
+// 當天最後一毫秒,`from` 維持原樣(當天開始正好是 00:00,不需要調整)。
+function endOfDayUtc(dateOnly: string): Date {
+  return new Date(`${dateOnly}T23:59:59.999Z`);
+}
+
 export async function createCat(
   playerId: string,
   input: { name: string; birthdate?: string; notes?: string },
@@ -108,7 +115,7 @@ export async function recordBowelMovement(
 export async function listBowelMovements(catId: string, range?: { from?: string; to?: string }) {
   return repo.listBowelMovements(catId, {
     from: range?.from ? new Date(range.from) : undefined,
-    to: range?.to ? new Date(range.to) : undefined,
+    to: range?.to ? endOfDayUtc(range.to) : undefined,
   });
 }
 
@@ -172,7 +179,7 @@ export async function recordWeight(
 export async function listWeightRecords(catId: string, range?: { from?: string; to?: string }) {
   return repo.listWeightRecords(catId, {
     from: range?.from ? new Date(range.from) : undefined,
-    to: range?.to ? new Date(range.to) : undefined,
+    to: range?.to ? endOfDayUtc(range.to) : undefined,
   });
 }
 
@@ -240,7 +247,7 @@ export async function recordFluidInjection(
 export async function listFluidInjections(catId: string, range?: { from?: string; to?: string }) {
   return repo.listFluidInjections(catId, {
     from: range?.from ? new Date(range.from) : undefined,
-    to: range?.to ? new Date(range.to) : undefined,
+    to: range?.to ? endOfDayUtc(range.to) : undefined,
   });
 }
 
