@@ -29,6 +29,15 @@ export async function getCatForPlayer(catId: string, playerId: string) {
   return repo.findActiveCatById(catId);
 }
 
+// PATCH /cats/{catId}(票 07,定案見票 06):任何 cat_players 成員都能編輯基本資料,
+// 不限定晶片登記人——晶片轉移是獨立動作,不套用它的權限限制到一般編輯上。
+export async function updateCat(
+  catId: string,
+  input: { name?: string; birthdate?: string; notes?: string },
+) {
+  return repo.updateCat(catId, input);
+}
+
 // DELETE /cats/{catId}(ticket #23):封存而非硬刪除,歷史紀錄保留。
 export async function archiveCat(catId: string) {
   return repo.archiveCat(catId);

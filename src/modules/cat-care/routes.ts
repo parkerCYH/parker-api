@@ -119,6 +119,19 @@ const historyQuerySchema = z.object({
   to: z.string().date().optional(),
 });
 
+// PATCH /cats/{catId}(票 07,定案見票 06 Answer #3):birthdate 改用嚴格日期格式驗證,
+// 並禁止未來日期。POST /cats 是否同步補強留給後續票處理,不在本票範圍。
+const nonFutureDateSchema = z.string().date().refine(
+  (value) => value <= new Date().toISOString().slice(0, 10),
+  { message: "birthdate must not be in the future" },
+);
+
+const updateCatBodySchema = z.object({
+  name: z.string().min(1).optional(),
+  birthdate: nonFutureDateSchema.optional(),
+  notes: z.string().optional(),
+});
+
 // 每個 Player route 進入點都要過這一關(ticket #13):驗證 Bearer access token,
 // 再用 auth 的 canPlayer 檢查 catCare.access。回傳結果而非 Response——讓每個 handler
 // 自己用當下正確型別的 c.json() 產生回應,避免 zod-openapi 的 typed response 型別檢查衝突。
@@ -245,6 +258,46 @@ catCareRoutes.openapi(getCatRoute, async (c) => {
     return c.json({ error: "not_found" }, 404);
   }
 
+  return c.json(cat, 200);
+});
+
+const updateCatRoute = createRoute({
+  method: "patch",
+  path: "/cats/{catId}",
+  tags: ["cat-care"],
+  summary: "Update a cat's basic profile (name/birthdate/notes; caller must be a member)",
+  request: {
+    params: catIdParamSchema,
+    body: { content: { "application/json": { schema: updateCatBodySchema } } },
+  },
+  responses: {
+    200: { description: "Updated", content: { "application/json": { schema: catSchema } } },
+    401: {
+      description: "Missing or invalid access token",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    403: {
+      description: "Player lacks catCare.access",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    404: {
+      description: "Cat not found or caller is not a member",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+  },
+});
+
+catCareRoutes.openapi(updateCatRoute, async (c) => {
+  const auth = await authenticatePlayer(c);
+  if (!auth.ok) return c.json({ error: auth.error }, auth.status);
+
+  const { catId } = c.req.valid("param");
+  if (!(await service.isCatMember(catId, auth.playerId))) {
+    return c.json({ error: "not_found" }, 404);
+  }
+
+  const body = c.req.valid("json");
+  const cat = await service.updateCat(catId, body);
   return c.json(cat, 200);
 });
 

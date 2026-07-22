@@ -86,6 +86,14 @@ export async function findCatById(catId: string) {
   return cat;
 }
 
+export async function updateCat(
+  catId: string,
+  patch: { name?: string; birthdate?: string; notes?: string },
+) {
+  const [cat] = await db.update(cats).set(patch).where(eq(cats.id, catId)).returning();
+  return cat;
+}
+
 export async function archiveCat(catId: string) {
   const [cat] = await db
     .update(cats)

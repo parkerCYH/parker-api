@@ -331,6 +331,96 @@ describe("cat-care routes", () => {
     expect(res.status).toBe(404);
   });
 
+  it("lets a member partially update a cat's basic profile (ticket 07)", async () => {
+    const createRes = await app.request("/api/v1/cat-care/cats", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${authorizedToken}`,
+      },
+      body: JSON.stringify({ name: "Old Name", birthdate: "2019-05-01", notes: "old notes" }),
+    });
+    const cat = (await createRes.json()) as CatResponse;
+
+    // 只送 name,birthdate/notes 應維持不變(partial update)
+    const updateRes = await app.request(`/api/v1/cat-care/cats/${cat.id}`, {
+      method: "PATCH",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${authorizedToken}`,
+      },
+      body: JSON.stringify({ name: "New Name" }),
+    });
+    expect(updateRes.status).toBe(200);
+    const updated = (await updateRes.json()) as CatResponse;
+    expect(updated.name).toBe("New Name");
+    expect(updated.birthdate).toBe("2019-05-01");
+    expect(updated.notes).toBe("old notes");
+  });
+
+  it("404s updating a cat the caller is not a member of", async () => {
+    const createRes = await app.request("/api/v1/cat-care/cats", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${authorizedToken}`,
+      },
+      body: JSON.stringify({ name: "Not Yours To Edit" }),
+    });
+    const cat = (await createRes.json()) as CatResponse;
+
+    const otherProfile = {
+      sub: `google-other-${randomUUID()}`,
+      email: `other-${randomUUID()}@example.com`,
+      name: "Other Player",
+      picture: "https://example.com/avatar.png",
+    };
+    const other = await loginPlayer(otherProfile, CAT_CARE_REFERER, "catCare.access");
+
+    const res = await app.request(`/api/v1/cat-care/cats/${cat.id}`, {
+      method: "PATCH",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${other.accessToken}`,
+      },
+      body: JSON.stringify({ name: "Hijacked Name" }),
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it("rejects an empty name and a future birthdate when updating a cat (ticket 07)", async () => {
+    const createRes = await app.request("/api/v1/cat-care/cats", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${authorizedToken}`,
+      },
+      body: JSON.stringify({ name: "Validation Cat" }),
+    });
+    const cat = (await createRes.json()) as CatResponse;
+
+    const emptyNameRes = await app.request(`/api/v1/cat-care/cats/${cat.id}`, {
+      method: "PATCH",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${authorizedToken}`,
+      },
+      body: JSON.stringify({ name: "" }),
+    });
+    expect(emptyNameRes.status).toBe(400);
+
+    const futureYear = new Date().getUTCFullYear() + 1;
+    const futureBirthdateRes = await app.request(`/api/v1/cat-care/cats/${cat.id}`, {
+      method: "PATCH",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${authorizedToken}`,
+      },
+      body: JSON.stringify({ birthdate: `${futureYear}-01-01` }),
+    });
+    expect(futureBirthdateRes.status).toBe(400);
+  });
+
   it("lets only the recording Player edit a bowel movement (ticket #23)", async () => {
     const createRes = await app.request("/api/v1/cat-care/cats", {
       method: "POST",
