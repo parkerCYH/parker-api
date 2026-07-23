@@ -1,8 +1,7 @@
 import { serve } from "@hono/node-server";
 import app from "./app.js";
+import { env } from "./shared/env.js";
 
-const port = Number(process.env.PORT ?? 3001);
-
-serve({ fetch: app.fetch, port }, (info) => {
+serve({ fetch: app.fetch, port: env.PORT }, (info) => {
   console.log(`parker-api listening on port ${info.port}`);
 });

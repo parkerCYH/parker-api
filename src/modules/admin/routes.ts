@@ -21,6 +21,7 @@ import {
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import type { Context } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
+import { env } from "../../shared/env.js";
 import { verifyAdminAccessToken } from "./jwt.js";
 import {
   addToWhitelist,
@@ -136,7 +137,7 @@ adminRoutes.openapi(loginRoute, (c) => {
     path: "/",
   });
 
-  return c.redirect(buildGoogleAuthUrl(state, process.env.ADMIN_GOOGLE_REDIRECT_URI ?? ""));
+  return c.redirect(buildGoogleAuthUrl(state, env.ADMIN_GOOGLE_REDIRECT_URI));
 });
 
 const loginCallbackRoute = createRoute({
@@ -170,10 +171,10 @@ adminRoutes.openapi(loginCallbackRoute, async (c) => {
     return c.json({ error: "invalid_oauth_state" }, 400);
   }
 
-  const profile = await exchangeGoogleCode(code, process.env.ADMIN_GOOGLE_REDIRECT_URI ?? "");
+  const profile = await exchangeGoogleCode(code, env.ADMIN_GOOGLE_REDIRECT_URI);
   const result = await applyOrLoginWithGoogleProfile(profile);
 
-  const redirectUrl = new URL("/auth/callback", process.env.ADMIN_DASHBOARD_URL ?? "");
+  const redirectUrl = new URL("/auth/callback", env.ADMIN_DASHBOARD_URL);
 
   if (result.status === "pending") {
     redirectUrl.searchParams.set("status", "pending");
@@ -249,8 +250,13 @@ adminRoutes.openapi(refreshRoute, async (c) => {
   try {
     const session = await refreshSession(refreshToken);
     return c.json(session, 200);
-  } catch {
-    return c.json({ error: "invalid_refresh_token" }, 401);
+  } catch (err) {
+    // 同 auth module 的 /refresh(見 parker-api-env-loading 效力):只有 refresh token 真的
+    // 無效/過期才回 401,DB/設定層級例外要往上丟給 app.onError。
+    if (err instanceof Error && err.message === "invalid_refresh_token") {
+      return c.json({ error: "invalid_refresh_token" }, 401);
+    }
+    throw err;
   }
 });
 

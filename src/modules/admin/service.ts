@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import type { GoogleProfile } from "../auth/index.js";
 import { listRoles, roleHasRule } from "../rbac/index.js";
+import { env } from "../../shared/env.js";
 import { signAdminAccessToken } from "./jwt.js";
 import * as repo from "./repository.js";
 
@@ -12,8 +13,7 @@ function hashToken(token: string): string {
 }
 
 function isBootstrapOwnerEmail(email: string): boolean {
-  const allowlist = (process.env.SUPER_ADMIN_EMAILS ?? "")
-    .split(",")
+  const allowlist = env.SUPER_ADMIN_EMAILS.split(",")
     .map((entry) => entry.trim().toLowerCase())
     .filter(Boolean);
   return allowlist.includes(email.toLowerCase());

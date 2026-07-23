@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
+import { env } from "../../shared/env.js";
 import { resolveAppByReferer } from "./app-domains.js";
 import { buildGoogleAuthUrl, exchangeGoogleCode } from "./google-oauth.js";
 import { canPlayer, findOrCreatePlayer, grantAccess, issueSession, refreshSession } from "./service.js";
@@ -82,7 +83,7 @@ authRoutes.openapi(googleLoginRoute, (c) => {
     path: "/",
   });
 
-  return c.redirect(buildGoogleAuthUrl(state, process.env.GOOGLE_REDIRECT_URI ?? ""));
+  return c.redirect(buildGoogleAuthUrl(state, env.GOOGLE_REDIRECT_URI));
 });
 
 const googleCallbackRoute = createRoute({
@@ -138,7 +139,7 @@ authRoutes.openapi(googleCallbackRoute, async (c) => {
 
   let profile;
   try {
-    profile = await exchangeGoogleCode(code, process.env.GOOGLE_REDIRECT_URI ?? "");
+    profile = await exchangeGoogleCode(code, env.GOOGLE_REDIRECT_URI);
   } catch {
     return c.redirect(redirectWithError(payload.redirectUrl, "google_auth_failed"));
   }
@@ -193,7 +194,13 @@ authRoutes.openapi(refreshRoute, async (c) => {
   try {
     const session = await refreshSession(refreshToken);
     return c.json(session, 200);
-  } catch {
-    return c.json({ error: "invalid_refresh_token" }, 401);
+  } catch (err) {
+    // 只有「refresh token 真的無效/過期」才回 401;DB 連線失敗、env 驗證失敗等設定層級例外
+    // 要往上丟給 app.onError,回一般的 500,不能跟業務判斷失敗共用同一句錯誤訊息(見
+    // parker-api-env-loading 效力)。
+    if (err instanceof Error && err.message === "invalid_refresh_token") {
+      return c.json({ error: "invalid_refresh_token" }, 401);
+    }
+    throw err;
   }
 });

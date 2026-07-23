@@ -66,6 +66,17 @@ API 路徑會照功能嚴格切分,例如 `/api/v1/auth/*`、`/api/v1/cat-care/*
 
 ---
 
+## 🔧 本地開發環境變數
+
+本地開發一律用 `pnpm dev` 啟動——`dev` script 已內建 `tsx watch --env-file=.env`,會在進程啟動前把
+`.env` 灌進 `process.env`,`src/shared/env.ts` 再統一驗證、提供型別安全的存取。
+
+**不要**用 `set -a; source .env; set +a` 之類方式手動匯出環境變數。`AUTH_APP_DOMAINS` 的值是內含
+雙引號的 JSON 字串,這種手動 source 的方式會被 shell 的引號解析吃掉,得到一串不合法的 JSON,
+反而比完全沒設定環境變數更難排查。
+
+---
+
 ## 📚 各服務詳細規劃
 
 各 Side Project 的目的跟功能規劃,整理在 `docs/services` 資料夾裡,另外還有一個管理這些服務的 Admin Dashboard:

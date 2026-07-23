@@ -1,3 +1,5 @@
+import { env } from "../../shared/env.js";
+
 export interface AppDomainConfig {
   app: string;
   redirectUrl: string;
@@ -5,15 +7,9 @@ export interface AppDomainConfig {
 
 // 網域 → app 對照表(ADR-0006)。伺服器端維護,前端不用傳任何參數;導回網址只能是這裡登記過的,
 // 避免 open redirect。格式見 .env.example 的 AUTH_APP_DOMAINS(JSON,key 是 host,不含 scheme)。
+// 解析與驗證交給 src/shared/env.ts 的 schema,啟動時就會擋下格式錯誤,不再靜默降級成空表。
 function loadAppDomainTable(): Record<string, AppDomainConfig> {
-  const raw = process.env.AUTH_APP_DOMAINS;
-  if (!raw) return {};
-
-  try {
-    return JSON.parse(raw) as Record<string, AppDomainConfig>;
-  } catch {
-    return {};
-  }
+  return env.AUTH_APP_DOMAINS;
 }
 
 // Referer 而非 Origin:導去 /google 是瀏覽器頁面導轉(使用者點登入連結),不是 fetch/XHR,

@@ -3,11 +3,25 @@ import { desc, eq } from "drizzle-orm";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import app from "../../app.js";
 import { db } from "../../shared/db.js";
+import { env } from "../../shared/env.js";
 import { verifyPlayerAccessToken } from "../auth/index.js";
 import { createRole } from "../rbac/index.js";
 import { updateUserRole } from "./repository.js";
 import { loginExchangeCodes } from "./schema.js";
 import { canUser } from "./service.js";
+
+// src/shared/env.ts 的 env 是 createEnv() 在模組載入當下解析出的凍結物件,事後改
+// process.env.SUPER_ADMIN_EMAILS 不會反映到已解析的值(見 parker-api-env-loading 效力)。
+// 這裡用 importOriginal 保留其餘所有欄位跟 env.ts 的 schema 定案同步,只把回傳的 env 換成一個
+// 可變的 plain object,測試才能像原本一樣動態切換 SUPER_ADMIN_EMAILS 模擬不同的 bootstrap 情境。
+vi.mock("../../shared/env.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../shared/env.js")>();
+  return { env: { ...actual.env } };
+});
+
+// env.ts 的匯出型別是 Readonly(t3-env 的正常型別,production 程式碼不該改它),但上面的 mock
+// 在執行期換成了一個真正可變的 plain object——這裡只是讓型別檢查跟得上 mock 過的執行期行為。
+const mutableEnv = env as { -readonly [K in keyof typeof env]: (typeof env)[K] };
 
 const OWNER_PROFILE = {
   sub: `google-owner-${randomUUID()}`,
@@ -154,7 +168,7 @@ async function loginPlayerWithCatCareAccess() {
 
 describe("admin routes", () => {
   beforeAll(() => {
-    process.env.SUPER_ADMIN_EMAILS = OWNER_PROFILE.email;
+    mutableEnv.SUPER_ADMIN_EMAILS = OWNER_PROFILE.email;
   });
 
   afterEach(() => {
@@ -883,7 +897,7 @@ describe("admin routes", () => {
       name: "Exchange Flow User",
       picture: "https://example.com/avatar.png",
     };
-    process.env.SUPER_ADMIN_EMAILS = `${OWNER_PROFILE.email},${profile.email}`;
+    mutableEnv.SUPER_ADMIN_EMAILS = `${OWNER_PROFILE.email},${profile.email}`;
 
     currentProfile = profile;
     stubGoogleFetch();
@@ -919,7 +933,7 @@ describe("admin routes", () => {
     expect(session.refreshToken).toEqual(expect.any(String));
     expect(session.user.email).toBe(profile.email);
 
-    process.env.SUPER_ADMIN_EMAILS = OWNER_PROFILE.email;
+    mutableEnv.SUPER_ADMIN_EMAILS = OWNER_PROFILE.email;
   });
 
   it("redirects a pending application to ADMIN_DASHBOARD_URL with userId, no exchange needed", async () => {
@@ -992,7 +1006,7 @@ describe("admin routes", () => {
       name: "Expired Code User",
       picture: "https://example.com/avatar.png",
     };
-    process.env.SUPER_ADMIN_EMAILS = `${OWNER_PROFILE.email},${profile.email}`;
+    mutableEnv.SUPER_ADMIN_EMAILS = `${OWNER_PROFILE.email},${profile.email}`;
 
     currentProfile = profile;
     stubGoogleFetch();
@@ -1025,7 +1039,7 @@ describe("admin routes", () => {
     });
     expect(exchangeRes.status).toBe(400);
 
-    process.env.SUPER_ADMIN_EMAILS = OWNER_PROFILE.email;
+    mutableEnv.SUPER_ADMIN_EMAILS = OWNER_PROFILE.email;
   });
 
   it("rejects exchanging an unknown code", async () => {

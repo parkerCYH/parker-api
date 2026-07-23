@@ -1,6 +1,7 @@
 import { swaggerUI } from "@hono/swagger-ui";
 import { OpenAPIHono } from "@hono/zod-openapi";
 import { cors } from "hono/cors";
+import { env } from "./shared/env.js";
 import { errorHandler } from "./shared/error-handler.js";
 import { authRoutes, listAppOrigins } from "./modules/auth/index.js";
 import { adminRoutes } from "./modules/admin/index.js";
@@ -16,9 +17,9 @@ app.onError(errorHandler);
 function getAllowedOrigins(): string[] {
   const origins = new Set(listAppOrigins());
 
-  if (process.env.ADMIN_DASHBOARD_URL) {
+  if (env.ADMIN_DASHBOARD_URL) {
     try {
-      origins.add(new URL(process.env.ADMIN_DASHBOARD_URL).origin);
+      origins.add(new URL(env.ADMIN_DASHBOARD_URL).origin);
     } catch {
       // 格式錯誤就當沒設定,跟其餘網域解析邏輯一樣寬鬆處理。
     }
