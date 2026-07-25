@@ -13,4 +13,4 @@ RUN pnpm build
 
 EXPOSE 3001
 
-CMD ["node", "dist/index.js"]
+CMD ["sh", "-c", "pnpm db:migrate && node dist/index.js"]

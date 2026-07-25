@@ -30,6 +30,7 @@ export const env = createEnv({
     ADMIN_GOOGLE_REDIRECT_URI: z.string().default(""),
     ADMIN_DASHBOARD_URL: z.string().default(""),
     SUPER_ADMIN_EMAILS: z.string().default(""),
+    RENDER_GIT_COMMIT: z.string().default(""),
   },
   runtimeEnv: process.env,
   emptyStringAsUndefined: true,

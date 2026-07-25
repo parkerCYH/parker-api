@@ -37,7 +37,8 @@ app.use(
   }),
 );
 
-app.get("/health", (c) => c.json({ status: "ok" }));
+// commit 本機沒有 RENDER_GIT_COMMIT 時回 null,不因缺這個 Render 專屬變數而噴錯(票 07)。
+app.get("/health", (c) => c.json({ status: "ok", commit: env.RENDER_GIT_COMMIT || null }));
 
 app.route("/api/v1/auth", authRoutes);
 app.route("/api/v1/admin", adminRoutes);
