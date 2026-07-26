@@ -40,6 +40,7 @@ services:
         condition: service_healthy
     volumes:
       - ./src:/app/src
+      - ./.env:/app/.env:ro
 
 volumes:
   pgdata:
