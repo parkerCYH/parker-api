@@ -36,6 +36,10 @@ export const env = createEnv({
     EVE_BASE_URL: z.string().default("http://localhost:3003"),
     PARKER_TO_EVE_KEY: z.string().default(""),
     EVE_TO_PARKER_KEY: z.string().default(""),
+    // parker-api 自己對外可被呼叫到的位址(票 20):組成給 eve 的 callback URL 用
+    // （`${PARKER_API_BASE_URL}/api/v1/cat-care/eve-callback/...`）。本機開發預設對應
+    // .claude/launch.json 的 parker-api-dev port；正式環境要填 Render 對外網域。
+    PARKER_API_BASE_URL: z.string().default("http://localhost:3002"),
   },
   runtimeEnv: process.env,
   emptyStringAsUndefined: true,

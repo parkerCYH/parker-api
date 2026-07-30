@@ -1,5 +1,8 @@
 import { canPlayer, getPlayerByEmail, getPlayerProfile, listPlayersWithAccess } from "../auth/index.js";
+import { requestBloodworkRecognition } from "../eve/index.js";
+import { env } from "../../shared/env.js";
 import * as repo from "./repository.js";
+import { consumeBloodworkJob, createBloodworkJob } from "./bloodwork-jobs.js";
 import type { BloodworkValues, FluidSite, FluidType, Method, StoolType } from "./schema.js";
 
 // `?to=` 是日期(YYYY-MM-DD),`new Date(dateOnly)` 會解析成當天 UTC 00:00,而不是當天結束——
@@ -429,6 +432,53 @@ export async function updateBloodworkRecord(
     ...values,
   });
   return { kind: "ok", record: updated };
+}
+
+export type StartBloodworkRecognitionResult = { kind: "ok"; jobId: string } | { kind: "eve_unreachable" };
+
+// POST /cats/{catId}/bloodwork-records/recognize(票 20):發起照片辨識作業。自己產生 job id、
+// 記住 catId/playerId(見 bloodwork-jobs.ts),組出帶 job id 的 callback URL 一起交給 eve
+// (票 08 定案的作業關聯方式)。eve 沒接受這個作業(網路錯誤或非 2xx)時,不留下孤兒 job。
+export async function startBloodworkRecognition(
+  catId: string,
+  playerId: string,
+  photo: { data: Buffer; mediaType: string; filename: string },
+): Promise<StartBloodworkRecognitionResult> {
+  const jobId = createBloodworkJob(catId, playerId);
+  const callbackUrl = new URL(
+    `/api/v1/cat-care/eve-callback/bloodwork-recognition/${jobId}`,
+    env.PARKER_API_BASE_URL,
+  ).toString();
+
+  const result = await requestBloodworkRecognition({ photo, jobId, callbackUrl });
+  if (!result.ok) {
+    consumeBloodworkJob(jobId);
+    return { kind: "eve_unreachable" };
+  }
+
+  return { kind: "ok", jobId };
+}
+
+export type BloodworkRecognitionCallbackPayload =
+  | { status: "success"; data: BloodworkValues }
+  | { status: "failed" };
+
+export type HandleBloodworkRecognitionCallbackResult = { kind: "ok" } | { kind: "unknown_job" };
+
+// eve → parker-api callback(票 20):success 時把票 08 定案的結構化數據透過 createDraftBloodworkRecord
+// 寫入 draft 紀錄;failed 時不寫入任何東西,交由使用者改走手動填寫入口(票 08 定案)。
+export async function handleBloodworkRecognitionCallback(
+  jobId: string,
+  payload: BloodworkRecognitionCallbackPayload,
+): Promise<HandleBloodworkRecognitionCallbackResult> {
+  const job = consumeBloodworkJob(jobId);
+  if (!job) return { kind: "unknown_job" };
+
+  if (payload.status === "success") {
+    await createDraftBloodworkRecord(job.catId, job.playerId, payload.data);
+  }
+
+  return { kind: "ok" };
 }
 
 // DELETE /cats/{catId}/bloodwork-records/{id}(票 18):hard delete,限 recorded_by 本人。

@@ -31,3 +31,5 @@ services:
         sync: false
       - key: EVE_TO_PARKER_KEY
         sync: false
+      - key: PARKER_API_BASE_URL
+        sync: false

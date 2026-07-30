@@ -35,6 +35,8 @@ export default defineConfig({
         }),
       EVE_BASE_URL: process.env.EVE_BASE_URL ?? "http://127.0.0.1:38173",
       PARKER_TO_EVE_KEY: process.env.PARKER_TO_EVE_KEY ?? "test-parker-to-eve-key",
+      EVE_TO_PARKER_KEY: process.env.EVE_TO_PARKER_KEY ?? "test-eve-to-parker-key",
+      PARKER_API_BASE_URL: process.env.PARKER_API_BASE_URL ?? "http://test.parker-api.local",
     },
   },
 });

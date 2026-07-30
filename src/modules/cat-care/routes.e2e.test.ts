@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import app from "../../app.js";
+import { env } from "../../shared/env.js";
 import { grantAccess } from "../auth/index.js";
 import { listAllCats } from "./index.js";
 
@@ -1438,5 +1439,187 @@ describe("cat-care routes", () => {
       { method: "DELETE", headers: { authorization: `Bearer ${authorizedToken}` } },
     );
     expect(secondDeleteRes.status).toBe(404);
+  });
+
+  describe("bloodwork photo recognition (票 20)", () => {
+    interface RecognizeCall {
+      jobId: string;
+      callbackUrl: string;
+      sharedKey: string | null;
+      photoBytes: Uint8Array;
+    }
+
+    // 用假的 eve 端點取代真正的 apps/eve,讓「parker-api 怎麼發起辨識作業」這件事可以在 CI
+    // 重現,不依賴真的 eve/Gemini 跑起來(比照 eve module 的 client.e2e.test.ts)。
+    function stubEveFetch(behavior: "accept" | "reject"): RecognizeCall[] {
+      const calls: RecognizeCall[] = [];
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+          const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+          if (!url.endsWith("/bloodwork/recognize")) {
+            throw new Error(`unexpected fetch to ${url}`);
+          }
+
+          const form = init?.body as FormData;
+          const photo = form.get("photo") as Blob;
+          const headers = init?.headers as Record<string, string> | undefined;
+          calls.push({
+            jobId: String(form.get("jobId")),
+            callbackUrl: String(form.get("callbackUrl")),
+            sharedKey: headers?.["x-parker-to-eve-key"] ?? null,
+            photoBytes: new Uint8Array(await photo.arrayBuffer()),
+          });
+
+          return behavior === "accept"
+            ? new Response(JSON.stringify({ ok: true }), { status: 202 })
+            : new Response("bad gateway", { status: 502 });
+        }),
+      );
+      return calls;
+    }
+
+    async function createCat(name: string): Promise<CatResponse> {
+      const res = await app.request("/api/v1/cat-care/cats", {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${authorizedToken}` },
+        body: JSON.stringify({ name }),
+      });
+      return res.json() as Promise<CatResponse>;
+    }
+
+    function recognizeRequest(catId: string, token: string) {
+      const formData = new FormData();
+      formData.set("photo", new Blob([new Uint8Array([1, 2, 3])], { type: "image/jpeg" }), "report.jpg");
+      return app.request(`/api/v1/cat-care/cats/${catId}/bloodwork-records/recognize`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}` },
+        body: formData,
+      });
+    }
+
+    it("forwards the uploaded photo to eve with the shared key and returns 202 with a job id", async () => {
+      const cat = await createCat("Recognize Accept Cat");
+      const calls = stubEveFetch("accept");
+
+      const res = await recognizeRequest(cat.id, authorizedToken);
+      expect(res.status).toBe(202);
+      const body = (await res.json()) as { jobId: string };
+      expect(body.jobId).toBeTruthy();
+
+      expect(calls).toHaveLength(1);
+      expect(calls[0].jobId).toBe(body.jobId);
+      expect(calls[0].sharedKey).toBe(env.PARKER_TO_EVE_KEY);
+      expect(calls[0].photoBytes).toEqual(new Uint8Array([1, 2, 3]));
+      expect(new URL(calls[0].callbackUrl).pathname).toBe(
+        `/api/v1/cat-care/eve-callback/bloodwork-recognition/${body.jobId}`,
+      );
+    });
+
+    it("returns 502 when eve does not accept the recognition request", async () => {
+      const cat = await createCat("Recognize Reject Cat");
+      stubEveFetch("reject");
+
+      const res = await recognizeRequest(cat.id, authorizedToken);
+      expect(res.status).toBe(502);
+    });
+
+    it("404s a recognize request for a cat the caller is not a member of", async () => {
+      const cat = await createCat("Recognize Not Member Cat");
+      const otherMember = await newCatCarePlayer("recognize-not-member");
+      stubEveFetch("accept");
+
+      const res = await recognizeRequest(cat.id, otherMember.accessToken);
+      expect(res.status).toBe(404);
+    });
+
+    it("rejects an eve callback with a missing or wrong shared key", async () => {
+      const missingKeyRes = await app.request(
+        "/api/v1/cat-care/eve-callback/bloodwork-recognition/some-job-id",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ status: "failed" }),
+        },
+      );
+      expect(missingKeyRes.status).toBe(401);
+
+      const wrongKeyRes = await app.request(
+        "/api/v1/cat-care/eve-callback/bloodwork-recognition/some-job-id",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-eve-to-parker-key": "wrong-key" },
+          body: JSON.stringify({ status: "failed" }),
+        },
+      );
+      expect(wrongKeyRes.status).toBe(401);
+    });
+
+    it("404s an eve callback for an unknown job id", async () => {
+      const res = await app.request(
+        "/api/v1/cat-care/eve-callback/bloodwork-recognition/unknown-job-id",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-eve-to-parker-key": env.EVE_TO_PARKER_KEY },
+          body: JSON.stringify({ status: "failed" }),
+        },
+      );
+      expect(res.status).toBe(404);
+    });
+
+    it("writes a draft record on a success callback, and writes nothing on a failed callback", async () => {
+      const cat = await createCat("Recognize Callback Cat");
+
+      const successCalls = stubEveFetch("accept");
+      const successJobRes = await recognizeRequest(cat.id, authorizedToken);
+      const { jobId: successJobId } = (await successJobRes.json()) as { jobId: string };
+      const successCallbackPath = new URL(successCalls[0].callbackUrl).pathname;
+
+      const callbackRes = await app.request(successCallbackPath, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-eve-to-parker-key": env.EVE_TO_PARKER_KEY },
+        body: JSON.stringify({ status: "success", data: { glu: 105.5, wbc: 8.1 } }),
+      });
+      expect(callbackRes.status).toBe(200);
+
+      // 同一個 job id 只能消費一次(票 20 定案:一次性),第二次 callback 視為未知作業。
+      const secondCallbackRes = await app.request(successCallbackPath, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-eve-to-parker-key": env.EVE_TO_PARKER_KEY },
+        body: JSON.stringify({ status: "success", data: { glu: 999 } }),
+      });
+      expect(secondCallbackRes.status).toBe(404);
+
+      const listRes = await app.request(`/api/v1/cat-care/cats/${cat.id}/bloodwork-records`, {
+        headers: { authorization: `Bearer ${authorizedToken}` },
+      });
+      const records = (await listRes.json()) as Array<{
+        status: string;
+        glu: number | null;
+        wbc: number | null;
+      }>;
+      expect(records).toHaveLength(1);
+      expect(records[0].status).toBe("draft");
+      expect(records[0].glu).toBe(105.5);
+      expect(records[0].wbc).toBe(8.1);
+
+      const failedCalls = stubEveFetch("accept");
+      await recognizeRequest(cat.id, authorizedToken);
+      const failedCallbackPath = new URL(failedCalls[0].callbackUrl).pathname;
+
+      const failedCallbackRes = await app.request(failedCallbackPath, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-eve-to-parker-key": env.EVE_TO_PARKER_KEY },
+        body: JSON.stringify({ status: "failed" }),
+      });
+      expect(failedCallbackRes.status).toBe(200);
+
+      const listAfterFailureRes = await app.request(`/api/v1/cat-care/cats/${cat.id}/bloodwork-records`, {
+        headers: { authorization: `Bearer ${authorizedToken}` },
+      });
+      const recordsAfterFailure = (await listAfterFailureRes.json()) as unknown[];
+      expect(recordsAfterFailure).toHaveLength(1);
+      expect(successJobId).not.toBe(failedCalls[0].jobId);
+    });
   });
 });

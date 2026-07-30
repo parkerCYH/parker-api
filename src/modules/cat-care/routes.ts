@@ -1,6 +1,7 @@
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import type { Context } from "hono";
 import { canPlayer, verifyPlayerAccessToken } from "../auth/index.js";
+import { verifyEveCallback } from "../eve/index.js";
 import * as service from "./service.js";
 
 type AuthResult =
@@ -165,6 +166,22 @@ const bloodworkBodySchema = z
     recordedAt: z.string().datetime().optional(),
   })
   .merge(bloodworkValuesSchema);
+
+// 票 20:POST /cats/{catId}/bloodwork-records/recognize 的 multipart/form-data body。
+const recognizeBloodworkBodySchema = z.object({
+  photo: z.instanceof(File),
+});
+
+const recognizeBloodworkResponseSchema = z.object({ jobId: z.string() });
+
+// 票 20:eve callback 帶 job id 定位作業(票 08 定案),不走 Player 認證(見 verifyEveCallback)。
+const bloodworkCallbackParamSchema = z.object({ jobId: z.string() });
+
+// success 附票 04/18 定案的 34 項欄位,failed 不附任何結構化數據(票 08 定案)。
+const bloodworkRecognitionCallbackBodySchema = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("success"), data: bloodworkValuesSchema }),
+  z.object({ status: z.literal("failed") }),
+]);
 
 const invitedPlayerSchema = z.object({
   id: z.string().uuid(),
@@ -1052,6 +1069,101 @@ catCareRoutes.openapi(deleteBloodworkRecordRoute, async (c) => {
   if (result.kind === "not_found") return c.json({ error: "not_found" }, 404);
   if (result.kind === "forbidden") return c.json({ error: "forbidden" }, 403);
   return c.body(null, 204);
+});
+
+const recognizeBloodworkRoute = createRoute({
+  method: "post",
+  path: "/cats/{catId}/bloodwork-records/recognize",
+  tags: ["cat-care"],
+  summary:
+    "Upload a bloodwork report photo for AI recognition (async; result lands as a draft record once eve calls back)",
+  request: {
+    params: catIdParamSchema,
+    body: { content: { "multipart/form-data": { schema: recognizeBloodworkBodySchema } } },
+  },
+  responses: {
+    202: {
+      description: "Recognition job accepted by eve",
+      content: { "application/json": { schema: recognizeBloodworkResponseSchema } },
+    },
+    401: {
+      description: "Missing or invalid access token",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    403: {
+      description: "Player lacks catCare.access",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    404: {
+      description: "Cat not found or caller is not a member",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    502: {
+      description: "eve did not accept the recognition request",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+  },
+});
+
+catCareRoutes.openapi(recognizeBloodworkRoute, async (c) => {
+  const auth = await authenticatePlayer(c);
+  if (!auth.ok) return c.json({ error: auth.error }, auth.status);
+
+  const { catId } = c.req.valid("param");
+  if (!(await service.isCatMember(catId, auth.playerId))) {
+    return c.json({ error: "not_found" }, 404);
+  }
+
+  const { photo } = c.req.valid("form");
+  const result = await service.startBloodworkRecognition(catId, auth.playerId, {
+    data: Buffer.from(await photo.arrayBuffer()),
+    mediaType: photo.type || "image/jpeg",
+    filename: photo.name || "bloodwork.jpg",
+  });
+
+  if (result.kind === "eve_unreachable") {
+    return c.json({ error: "eve_unreachable" }, 502);
+  }
+
+  return c.json({ jobId: result.jobId }, 202);
+});
+
+const bloodworkRecognitionCallbackRoute = createRoute({
+  method: "post",
+  path: "/eve-callback/bloodwork-recognition/{jobId}",
+  tags: ["cat-care"],
+  summary:
+    "eve → parker-api callback for a photo-recognition job (service-to-service; verified by shared key, not Player auth)",
+  request: {
+    params: bloodworkCallbackParamSchema,
+    body: { content: { "application/json": { schema: bloodworkRecognitionCallbackBodySchema } } },
+  },
+  responses: {
+    200: {
+      description: "Accepted",
+      content: { "application/json": { schema: z.object({ ok: z.boolean() }) } },
+    },
+    401: {
+      description: "Missing or invalid eve → parker-api shared key",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    404: {
+      description: "Unknown or already-consumed job id",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+  },
+});
+
+catCareRoutes.openapi(bloodworkRecognitionCallbackRoute, async (c) => {
+  if (!verifyEveCallback(c)) {
+    return c.json({ error: "unauthorized" }, 401);
+  }
+
+  const { jobId } = c.req.valid("param");
+  const body = c.req.valid("json");
+  const result = await service.handleBloodworkRecognitionCallback(jobId, body);
+  if (result.kind === "unknown_job") return c.json({ error: "not_found" }, 404);
+  return c.json({ ok: true }, 200);
 });
 
 const listCatPlayersRoute = createRoute({
