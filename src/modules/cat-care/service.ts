@@ -413,22 +413,23 @@ export type UpdateBloodworkRecordResult = EditResult<
   NonNullable<Awaited<ReturnType<typeof repo.updateBloodworkRecord>>>
 >;
 
-// PATCH /cats/{catId}/bloodwork-records/{id}(票 18):只有當初 recorded_by 本人能編輯,
-// 允許任意欄位子集更新(所有欄位選填);status 不在這支公開 PATCH 的可寫範圍內
-// (draft→confirmed 的轉換是票 21 的範圍,屆時再擴充)。
+// PATCH /cats/{catId}/bloodwork-records/{id}(票 18,狀態轉換見票 21):只有當初 recorded_by
+// 本人能編輯,允許任意欄位子集更新(所有欄位選填)。status 只接受 route 層 schema 已限制的
+// literal "confirmed"(draft→confirmed,票 09 定案的狀態機),不需要在這裡再檢查轉換方向。
 export async function updateBloodworkRecord(
   catId: string,
   recordId: string,
   playerId: string,
-  input: { recordedAt?: string } & BloodworkValues,
+  input: { recordedAt?: string; status?: "confirmed" } & BloodworkValues,
 ): Promise<UpdateBloodworkRecordResult> {
   const record = await repo.findBloodworkRecordById(recordId);
   if (!record || record.catId !== catId) return { kind: "not_found" };
   if (record.recordedBy !== playerId) return { kind: "forbidden" };
 
-  const { recordedAt, ...values } = input;
+  const { recordedAt, status, ...values } = input;
   const updated = await repo.updateBloodworkRecord(recordId, {
     ...(recordedAt !== undefined ? { recordedAt: new Date(recordedAt) } : {}),
+    ...(status !== undefined ? { status } : {}),
     ...values,
   });
   return { kind: "ok", record: updated };

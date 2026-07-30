@@ -312,7 +312,7 @@ export async function findBloodworkRecordById(id: string) {
 
 export async function updateBloodworkRecord(
   id: string,
-  patch: { recordedAt?: Date } & BloodworkValues,
+  patch: { recordedAt?: Date; status?: BloodworkStatus } & BloodworkValues,
 ) {
   const [row] = await db.update(bloodworkRecords).set(patch).where(eq(bloodworkRecords.id, id)).returning();
   return row;

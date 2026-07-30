@@ -1621,5 +1621,39 @@ describe("cat-care routes", () => {
       expect(recordsAfterFailure).toHaveLength(1);
       expect(successJobId).not.toBe(failedCalls[0].jobId);
     });
+
+    it("confirms a draft record via PATCH status, optionally alongside edited field values (票 21)", async () => {
+      const cat = await createCat("Confirm Draft Cat");
+
+      const calls = stubEveFetch("accept");
+      const recognizeRes = await recognizeRequest(cat.id, authorizedToken);
+      const { jobId } = (await recognizeRes.json()) as { jobId: string };
+      const callbackPath = new URL(calls[0].callbackUrl).pathname;
+
+      await app.request(callbackPath, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-eve-to-parker-key": env.EVE_TO_PARKER_KEY },
+        body: JSON.stringify({ status: "success", data: { glu: 90 } }),
+      });
+
+      const listRes = await app.request(`/api/v1/cat-care/cats/${cat.id}/bloodwork-records`, {
+        headers: { authorization: `Bearer ${authorizedToken}` },
+      });
+      const [draft] = (await listRes.json()) as Array<{ id: string; status: string; glu: number | null }>;
+      expect(draft.status).toBe("draft");
+      expect(jobId).toBeTruthy();
+
+      // 使用者在 read-only/edit 兩態表單改了 glu、順便按下確認送出(票 09 定案:同一次 PATCH
+      // 可以同時帶欄位修改與 status 轉換,不需要拆成兩次呼叫)。
+      const confirmRes = await app.request(`/api/v1/cat-care/cats/${cat.id}/bloodwork-records/${draft.id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json", authorization: `Bearer ${authorizedToken}` },
+        body: JSON.stringify({ glu: 95, status: "confirmed" }),
+      });
+      expect(confirmRes.status).toBe(200);
+      const confirmed = (await confirmRes.json()) as { status: string; glu: number | null };
+      expect(confirmed.status).toBe("confirmed");
+      expect(confirmed.glu).toBe(95);
+    });
   });
 });

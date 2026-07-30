@@ -167,9 +167,18 @@ const bloodworkBodySchema = z
   })
   .merge(bloodworkValuesSchema);
 
+// PATCH 專用:多接受 status(票 21 定案的 draft→confirmed 轉換)。POST 不套用這個 schema,
+// 公開建立路徑仍固定寫 confirmed(票 18 定案),不開放呼叫端指定其他狀態。
+const updateBloodworkBodySchema = bloodworkBodySchema.extend({
+  status: z.literal("confirmed").optional(),
+});
+
 // 票 20:POST /cats/{catId}/bloodwork-records/recognize 的 multipart/form-data body。
+// z.instanceof(File) 本身在 zod-to-openapi 底下會產生空 schema({}),導致 orval 產生的前端
+// 型別是 unknown(票 21 codegen 時發現這個落差)——用 .openapi() 明確標成 binary,讓產生的
+// OpenAPI spec 正確描述這個欄位是檔案上傳。
 const recognizeBloodworkBodySchema = z.object({
-  photo: z.instanceof(File),
+  photo: z.instanceof(File).openapi({ type: "string", format: "binary" }),
 });
 
 const recognizeBloodworkResponseSchema = z.object({ jobId: z.string() });
@@ -1006,7 +1015,7 @@ const updateBloodworkRecordRoute = createRoute({
   summary: "Edit a bloodwork record's fields (only the recording Player may edit)",
   request: {
     params: catRecordParamSchema,
-    body: { content: { "application/json": { schema: bloodworkBodySchema } } },
+    body: { content: { "application/json": { schema: updateBloodworkBodySchema } } },
   },
   responses: {
     200: { description: "Updated", content: { "application/json": { schema: bloodworkRecordSchema } } },
