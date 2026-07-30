@@ -1,14 +1,28 @@
 import { env } from "../../shared/env.js";
 import type { BloodworkValues, HealthAdviceContent } from "../cat-care/schema.js";
 
+// eve 真的斷線/連不上時(DNS 失敗、連線被拒、逾時),fetch 本身會 throw 而不是回傳非 2xx
+// 的 Response——這種情況下每個呼叫端都要能跟「eve 回了非 2xx」一樣被歸類成「打不到 eve」,
+// 不能讓例外往上炸穿 service.ts 變成 app.onError 兜底的通用 500。集中在這裡包一層 try/catch,
+// 呼叫端只需要多處理 res 為 null 的情況即可。
+async function safeFetch(url: string | URL, init?: RequestInit): Promise<Response | null> {
+  try {
+    return await fetch(url, init);
+  } catch {
+    return null;
+  }
+}
+
 export type EvePingResult = { ok: boolean; status: number };
 
 // 票 17 walking skeleton：帶票 07 定案的第一組共享密鑰打 eve 的 /ping，
 // 證明 parker-api → eve 的認證機制打通。不含任何 Gemini/AI 呼叫。
 export async function pingEve(): Promise<EvePingResult> {
-  const res = await fetch(new URL("/ping", env.EVE_BASE_URL), {
+  const res = await safeFetch(new URL("/ping", env.EVE_BASE_URL), {
     headers: { "x-parker-to-eve-key": env.PARKER_TO_EVE_KEY },
   });
+  if (!res) return { ok: false, status: 0 };
+
   return { ok: res.ok, status: res.status };
 }
 
@@ -31,11 +45,13 @@ export async function requestBloodworkRecognition(args: {
     args.photo.filename,
   );
 
-  const res = await fetch(new URL("/bloodwork/recognize", env.EVE_BASE_URL), {
+  const res = await safeFetch(new URL("/bloodwork/recognize", env.EVE_BASE_URL), {
     method: "POST",
     headers: { "x-parker-to-eve-key": env.PARKER_TO_EVE_KEY },
     body: formData,
   });
+  if (!res) return { ok: false, status: 0 };
+
   return { ok: res.ok, status: res.status };
 }
 
@@ -61,12 +77,12 @@ export async function requestChatReply(payload: {
   catCareData: ChatCatCareData;
   messages: ChatMessage[];
 }): Promise<RequestChatReplyResult> {
-  const res = await fetch(new URL("/chat", env.EVE_BASE_URL), {
+  const res = await safeFetch(new URL("/chat", env.EVE_BASE_URL), {
     method: "POST",
     headers: { "content-type": "application/json", "x-parker-to-eve-key": env.PARKER_TO_EVE_KEY },
     body: JSON.stringify(payload),
   });
-  if (!res.ok || !res.body) return { kind: "eve_unreachable" };
+  if (!res || !res.ok || !res.body) return { kind: "eve_unreachable" };
 
   return { kind: "ok", response: res };
 }
@@ -79,12 +95,12 @@ export type RequestHealthAdviceResult =
 // 所以跟 requestBloodworkRecognition 不同,這裡要直接解析 eve 的回應內容當作結果回傳,
 // 不是只看 2xx 就結束。
 export async function requestHealthAdvice(records: BloodworkValues[]): Promise<RequestHealthAdviceResult> {
-  const res = await fetch(new URL("/health-advice", env.EVE_BASE_URL), {
+  const res = await safeFetch(new URL("/health-advice", env.EVE_BASE_URL), {
     method: "POST",
     headers: { "content-type": "application/json", "x-parker-to-eve-key": env.PARKER_TO_EVE_KEY },
     body: JSON.stringify({ records }),
   });
-  if (!res.ok) return { kind: "eve_unreachable" };
+  if (!res || !res.ok) return { kind: "eve_unreachable" };
 
   const advice = (await res.json()) as HealthAdviceContent;
   return { kind: "ok", advice };
