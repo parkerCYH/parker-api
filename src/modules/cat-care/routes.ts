@@ -225,6 +225,15 @@ const createMessageBodySchema = z.object({
   content: z.string().min(1),
 });
 
+// 票 25:重開既有對話串需要復原歷史訊息,補上票 24 當時沒做的 GET,形狀比照 messages 資料表。
+const messageSchema = z.object({
+  id: z.string().uuid(),
+  conversationId: z.string().uuid(),
+  role: z.enum(["user", "assistant"]),
+  content: z.string(),
+  createdAt: z.string(),
+});
+
 const invitedPlayerSchema = z.object({
   id: z.string().uuid(),
   email: z.string().email(),
@@ -1333,6 +1342,46 @@ catCareRoutes.openapi(listConversationsRoute, async (c) => {
 
   const conversations = await service.listConversations(catId);
   return c.json(conversations, 200);
+});
+
+const listMessagesRoute = createRoute({
+  method: "get",
+  path: "/cats/{catId}/conversations/{id}/messages",
+  tags: ["cat-care"],
+  summary: "List messages in a conversation thread, oldest first (caller must be a member)",
+  request: { params: catRecordParamSchema },
+  responses: {
+    200: {
+      description: "Messages",
+      content: { "application/json": { schema: z.array(messageSchema) } },
+    },
+    401: {
+      description: "Missing or invalid access token",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    403: {
+      description: "Player lacks catCare.access",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    404: {
+      description: "Cat not found, caller is not a member, or conversation does not belong to this cat",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+  },
+});
+
+catCareRoutes.openapi(listMessagesRoute, async (c) => {
+  const auth = await authenticatePlayer(c);
+  if (!auth.ok) return c.json({ error: auth.error }, auth.status);
+
+  const { catId, id } = c.req.valid("param");
+  if (!(await service.isCatMember(catId, auth.playerId))) {
+    return c.json({ error: "not_found" }, 404);
+  }
+
+  const result = await service.listMessages(catId, id);
+  if (result.kind === "not_found") return c.json({ error: "not_found" }, 404);
+  return c.json(result.messages, 200);
 });
 
 const sendMessageRoute = createRoute({

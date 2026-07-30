@@ -598,6 +598,19 @@ export async function listConversations(catId: string) {
   return repo.listConversationsForCat(catId);
 }
 
+// GET /cats/{catId}/conversations/{id}/messages(票 25:重新開啟既有對話串時,前端需要把先前
+// 訊息復原到畫面上——票 24 沒有補這支端點,因為當時的 AC 只涵蓋「送出訊息」這一輪。
+export type ListMessagesResult =
+  | { kind: "ok"; messages: Awaited<ReturnType<typeof repo.listMessagesForConversation>> }
+  | { kind: "not_found" };
+
+export async function listMessages(catId: string, conversationId: string): Promise<ListMessagesResult> {
+  const conversation = await repo.findConversationById(conversationId);
+  if (!conversation || conversation.catId !== catId) return { kind: "not_found" };
+
+  return { kind: "ok", messages: await repo.listMessagesForConversation(conversationId) };
+}
+
 // 票 24:把一隻貓的全部 cat-care 資料(不限驗血)蒐集成 eve 聊天 context 需要的形狀
 // (票 15 定案:每輪全部塞入,不做篩選/摘要)。範圍不套用 ?from=&to=,固定撈全部歷史。
 async function gatherCatCareData(catId: string): Promise<ChatCatCareData> {

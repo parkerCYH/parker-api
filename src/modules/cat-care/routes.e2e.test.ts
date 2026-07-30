@@ -1934,6 +1934,20 @@ describe("cat-care routes", () => {
       });
     }
 
+    interface MessageResponse {
+      id: string;
+      conversationId: string;
+      role: "user" | "assistant";
+      content: string;
+      createdAt: string;
+    }
+
+    function listMessages(catId: string, conversationId: string, token: string) {
+      return app.request(`/api/v1/cat-care/cats/${catId}/conversations/${conversationId}/messages`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+    }
+
     // 跟票 20/22 的 stubEveFetch 都不同:票 24 是串流回應,回傳一個真的 ReadableStream
     // (逐 chunk enqueue),而不是一次性的 JSON body,藉此驗證 parker-api 真的邊收邊轉發,
     // 不是等 eve 整段回完才動作。
@@ -2057,6 +2071,41 @@ describe("cat-care routes", () => {
 
       const res = await sendMessage(cat.id, conversation.id, "hi", authorizedToken);
       expect(res.status).toBe(502);
+    });
+
+    it("lists a conversation's messages oldest first (票 25:重開對話串復原歷史)", async () => {
+      const cat = await createCat("Chat History List Cat");
+      const conversation = (await (await createConversation(cat.id, authorizedToken)).json()) as ConversationResponse;
+
+      stubEveChatFetch("accept", ["Hi", " there"]);
+      await (await sendMessage(cat.id, conversation.id, "First question", authorizedToken)).text();
+
+      const res = await listMessages(cat.id, conversation.id, authorizedToken);
+      expect(res.status).toBe(200);
+      const messages = (await res.json()) as MessageResponse[];
+      expect(messages.map((m) => ({ role: m.role, content: m.content }))).toEqual([
+        { role: "user", content: "First question" },
+        { role: "assistant", content: "Hi there" },
+      ]);
+      expect(messages[0].conversationId).toBe(conversation.id);
+    });
+
+    it("404s listing messages for a cat the caller is not a member of", async () => {
+      const cat = await createCat("Chat History Not Member Cat");
+      const conversation = (await (await createConversation(cat.id, authorizedToken)).json()) as ConversationResponse;
+      const otherMember = await newCatCarePlayer("chat-history-not-member");
+
+      const res = await listMessages(cat.id, conversation.id, otherMember.accessToken);
+      expect(res.status).toBe(404);
+    });
+
+    it("404s listing messages when the conversation does not belong to this cat", async () => {
+      const cat = await createCat("Chat History Cat A");
+      const otherCat = await createCat("Chat History Cat B");
+      const conversation = (await (await createConversation(otherCat.id, authorizedToken)).json()) as ConversationResponse;
+
+      const res = await listMessages(cat.id, conversation.id, authorizedToken);
+      expect(res.status).toBe(404);
     });
   });
 });
