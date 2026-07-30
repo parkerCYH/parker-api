@@ -39,6 +39,38 @@ export async function requestBloodworkRecognition(args: {
   return { ok: res.ok, status: res.status };
 }
 
+export type ChatCatCareData = {
+  cat: { name: string; birthdate: string | null; notes: string | null };
+  bowelMovements: unknown[];
+  weightRecords: unknown[];
+  fluidInjections: unknown[];
+  bloodworkRecords: unknown[];
+};
+
+export type ChatMessage = { role: "user" | "assistant"; content: string };
+
+export type RequestChatReplyResult = { kind: "ok"; response: Response } | { kind: "eve_unreachable" };
+
+// 票 24:對話聊天情境,HTTP POST + 串流回應(票 15 定案)。使用者全部 cat-care 資料由
+// parker-api 蒐集後隨請求一併送給 eve,而不是讓 eve 反過來呼叫 parker-api 的讀取 API——
+// 兩種都符合票 15 的架構定案,選這個做法是因為 parker-api 本來就有現成的資料存取邏輯
+// (repository.ts 的各個 listXxx),不需要為 eve 另開一組認證/讀取端點,也省了一次來回。
+// 不像 requestHealthAdvice 解析完整 JSON 回應,這裡直接把 eve 的串流 Response 原樣交回,
+// 呼叫端(service.ts)負責邊轉發邊蒐集完整文字存檔。
+export async function requestChatReply(payload: {
+  catCareData: ChatCatCareData;
+  messages: ChatMessage[];
+}): Promise<RequestChatReplyResult> {
+  const res = await fetch(new URL("/chat", env.EVE_BASE_URL), {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-parker-to-eve-key": env.PARKER_TO_EVE_KEY },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok || !res.body) return { kind: "eve_unreachable" };
+
+  return { kind: "ok", response: res };
+}
+
 export type RequestHealthAdviceResult =
   | { kind: "ok"; advice: HealthAdviceContent }
   | { kind: "eve_unreachable" };

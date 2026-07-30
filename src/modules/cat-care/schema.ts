@@ -200,3 +200,31 @@ export const healthAdviceBloodworkRecords = catCareSchema.table(
   },
   (table) => [primaryKey({ columns: [table.healthAdviceId, table.bloodworkRecordId] })],
 );
+
+export type MessageRole = "user" | "assistant";
+
+// 一隻貓可有多條對話串(票 15 定案),使用者可新建/切換。created_by 跟其他 xxx_by 欄位一樣
+// 指回 auth.players.id,不用 .references() 匯入(見上方跨 module FK 慣例),FK 手動加在 migration SQL。
+export const conversations = catCareSchema.table("conversations", {
+  id: uuid("id")
+    .primaryKey()
+    .$defaultFn(() => randomUUID()),
+  catId: uuid("cat_id")
+    .notNull()
+    .references(() => cats.id, { onDelete: "cascade" }),
+  createdBy: uuid("created_by").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+// 一條對話串底下多筆訊息(票 15 定案),role 比照既有 enum 慣例 DB 存 text、API 層 z.enum 驗證。
+export const messages = catCareSchema.table("messages", {
+  id: uuid("id")
+    .primaryKey()
+    .$defaultFn(() => randomUUID()),
+  conversationId: uuid("conversation_id")
+    .notNull()
+    .references(() => conversations.id, { onDelete: "cascade" }),
+  role: text("role").notNull().$type<MessageRole>(),
+  content: text("content").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});

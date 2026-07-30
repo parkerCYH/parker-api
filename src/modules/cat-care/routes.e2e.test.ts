@@ -1880,4 +1880,183 @@ describe("cat-care routes", () => {
       expect(res.status).toBe(404);
     });
   });
+
+  describe("chat (票 24)", () => {
+    interface ChatCall {
+      sharedKey: string | null;
+      messages: Array<{ role: string; content: string }>;
+      catCareData: { cat: { name: string } };
+    }
+
+    async function createCat(name: string): Promise<CatResponse> {
+      const res = await app.request("/api/v1/cat-care/cats", {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${authorizedToken}` },
+        body: JSON.stringify({ name }),
+      });
+      return res.json() as Promise<CatResponse>;
+    }
+
+    async function createBloodworkRecord(catId: string, glu: number): Promise<{ id: string }> {
+      const res = await app.request(`/api/v1/cat-care/cats/${catId}/bloodwork-records`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${authorizedToken}` },
+        body: JSON.stringify({ glu }),
+      });
+      return res.json() as Promise<{ id: string }>;
+    }
+
+    interface ConversationResponse {
+      id: string;
+      catId: string;
+      createdBy: string;
+      createdAt: string;
+    }
+
+    function createConversation(catId: string, token: string) {
+      return app.request(`/api/v1/cat-care/cats/${catId}/conversations`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}` },
+      });
+    }
+
+    function listConversations(catId: string, token: string) {
+      return app.request(`/api/v1/cat-care/cats/${catId}/conversations`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+    }
+
+    function sendMessage(catId: string, conversationId: string, content: string, token: string) {
+      return app.request(`/api/v1/cat-care/cats/${catId}/conversations/${conversationId}/messages`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+        body: JSON.stringify({ content }),
+      });
+    }
+
+    // 跟票 20/22 的 stubEveFetch 都不同:票 24 是串流回應,回傳一個真的 ReadableStream
+    // (逐 chunk enqueue),而不是一次性的 JSON body,藉此驗證 parker-api 真的邊收邊轉發,
+    // 不是等 eve 整段回完才動作。
+    function stubEveChatFetch(behavior: "accept" | "reject", chunks: string[] = ["Hello", " world"]): ChatCall[] {
+      const calls: ChatCall[] = [];
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+          const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+          if (!url.endsWith("/chat")) {
+            throw new Error(`unexpected fetch to ${url}`);
+          }
+
+          const headers = init?.headers as Record<string, string> | undefined;
+          const body = JSON.parse(String(init?.body)) as {
+            catCareData: { cat: { name: string } };
+            messages: Array<{ role: string; content: string }>;
+          };
+          calls.push({
+            sharedKey: headers?.["x-parker-to-eve-key"] ?? null,
+            messages: body.messages,
+            catCareData: body.catCareData,
+          });
+
+          if (behavior === "reject") {
+            return new Response("bad gateway", { status: 502 });
+          }
+
+          const encoder = new TextEncoder();
+          const stream = new ReadableStream<Uint8Array>({
+            start(controller) {
+              for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
+              controller.close();
+            },
+          });
+          return new Response(stream, { status: 200, headers: { "content-type": "text/plain; charset=utf-8" } });
+        }),
+      );
+      return calls;
+    }
+
+    it("creates a conversation belonging to the cat and the caller", async () => {
+      const cat = await createCat("Chat Cat");
+
+      const res = await createConversation(cat.id, authorizedToken);
+      expect(res.status).toBe(201);
+      const conversation = (await res.json()) as ConversationResponse;
+      expect(conversation.catId).toBe(cat.id);
+      expect(conversation.id).toBeTruthy();
+    });
+
+    it("lists a cat's conversations, newest first", async () => {
+      const cat = await createCat("Chat List Cat");
+      const first = (await (await createConversation(cat.id, authorizedToken)).json()) as ConversationResponse;
+      const second = (await (await createConversation(cat.id, authorizedToken)).json()) as ConversationResponse;
+
+      const res = await listConversations(cat.id, authorizedToken);
+      expect(res.status).toBe(200);
+      const list = (await res.json()) as ConversationResponse[];
+      expect(list.map((c) => c.id)).toEqual([second.id, first.id]);
+    });
+
+    it("404s for a cat the caller is not a member of", async () => {
+      const cat = await createCat("Chat Not Member Cat");
+      const otherMember = await newCatCarePlayer("chat-not-member");
+
+      expect((await createConversation(cat.id, otherMember.accessToken)).status).toBe(404);
+      expect((await listConversations(cat.id, otherMember.accessToken)).status).toBe(404);
+    });
+
+    it("streams eve's reply back chunk by chunk and forwards the shared key + cat-care data", async () => {
+      const cat = await createCat("Chat Stream Cat");
+      await createBloodworkRecord(cat.id, 105.5);
+      const conversation = (await (await createConversation(cat.id, authorizedToken)).json()) as ConversationResponse;
+      const calls = stubEveChatFetch("accept", ["Hello", " world"]);
+
+      const res = await sendMessage(cat.id, conversation.id, "How is my cat doing?", authorizedToken);
+      expect(res.status).toBe(200);
+      expect(await res.text()).toBe("Hello world");
+
+      expect(calls).toHaveLength(1);
+      expect(calls[0].sharedKey).toBe(env.PARKER_TO_EVE_KEY);
+      expect(calls[0].catCareData.cat.name).toBe("Chat Stream Cat");
+      expect(calls[0].messages).toEqual([{ role: "user", content: "How is my cat doing?" }]);
+    });
+
+    it("persists the user + assistant messages and resends full history on the next turn", async () => {
+      const cat = await createCat("Chat History Cat");
+      const conversation = (await (await createConversation(cat.id, authorizedToken)).json()) as ConversationResponse;
+
+      stubEveChatFetch("accept", ["First", " reply"]);
+      const firstRes = await sendMessage(cat.id, conversation.id, "First question", authorizedToken);
+      // 比照真正的呼叫端(cat-care 前端):要把回應的串流讀完,assistant 訊息才會在 flush 時
+      // 寫入(見 service.ts 的 sendMessage/TransformStream),不然 DB 裡不會有這筆訊息。
+      await firstRes.text();
+
+      const calls = stubEveChatFetch("accept", ["Second reply"]);
+      const res = await sendMessage(cat.id, conversation.id, "Second question", authorizedToken);
+      expect(await res.text()).toBe("Second reply");
+
+      expect(calls[0].messages).toEqual([
+        { role: "user", content: "First question" },
+        { role: "assistant", content: "First reply" },
+        { role: "user", content: "Second question" },
+      ]);
+    });
+
+    it("404s when the conversation does not belong to this cat", async () => {
+      const cat = await createCat("Chat Cat A");
+      const otherCat = await createCat("Chat Cat B");
+      const conversation = (await (await createConversation(otherCat.id, authorizedToken)).json()) as ConversationResponse;
+
+      const res = await sendMessage(cat.id, conversation.id, "hi", authorizedToken);
+      expect(res.status).toBe(404);
+    });
+
+    it("returns 502 when eve does not accept the chat request", async () => {
+      const cat = await createCat("Chat Reject Cat");
+      const conversation = (await (await createConversation(cat.id, authorizedToken)).json()) as ConversationResponse;
+      stubEveChatFetch("reject");
+
+      const res = await sendMessage(cat.id, conversation.id, "hi", authorizedToken);
+      expect(res.status).toBe(502);
+    });
+  });
 });

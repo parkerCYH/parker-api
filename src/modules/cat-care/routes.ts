@@ -211,6 +211,20 @@ const healthAdviceSchema = z.object({
   createdAt: z.string(),
 });
 
+// 票 24:對話聊天情境,對話串(conversation)本身的形狀,不含訊息內容(訊息只在送出時
+// 以串流回應轉發,沒有另外開 GET 端點——比照票 22 的先例:AC 沒要求就不多補,留給票 25 視
+// 實際 UI 需求決定要不要補這支)。
+const conversationSchema = z.object({
+  id: z.string().uuid(),
+  catId: z.string().uuid(),
+  createdBy: z.string().uuid(),
+  createdAt: z.string(),
+});
+
+const createMessageBodySchema = z.object({
+  content: z.string().min(1),
+});
+
 const invitedPlayerSchema = z.object({
   id: z.string().uuid(),
   email: z.string().email(),
@@ -1244,6 +1258,137 @@ catCareRoutes.openapi(listHealthAdviceHistoryRoute, async (c) => {
   const result = await service.getHealthAdviceHistory(catId, id);
   if (result.kind === "not_found") return c.json({ error: "not_found" }, 404);
   return c.json(result.advice, 200);
+});
+
+const createConversationRoute = createRoute({
+  method: "post",
+  path: "/cats/{catId}/conversations",
+  tags: ["cat-care"],
+  summary: "Start a new chat conversation thread for a cat (caller must be a member)",
+  request: { params: catIdParamSchema },
+  responses: {
+    201: { description: "Created", content: { "application/json": { schema: conversationSchema } } },
+    401: {
+      description: "Missing or invalid access token",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    403: {
+      description: "Player lacks catCare.access",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    404: {
+      description: "Cat not found or caller is not a member",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+  },
+});
+
+catCareRoutes.openapi(createConversationRoute, async (c) => {
+  const auth = await authenticatePlayer(c);
+  if (!auth.ok) return c.json({ error: auth.error }, auth.status);
+
+  const { catId } = c.req.valid("param");
+  if (!(await service.isCatMember(catId, auth.playerId))) {
+    return c.json({ error: "not_found" }, 404);
+  }
+
+  const conversation = await service.createConversation(catId, auth.playerId);
+  return c.json(conversation, 201);
+});
+
+const listConversationsRoute = createRoute({
+  method: "get",
+  path: "/cats/{catId}/conversations",
+  tags: ["cat-care"],
+  summary: "List chat conversation threads for a cat, newest first (caller must be a member)",
+  request: { params: catIdParamSchema },
+  responses: {
+    200: {
+      description: "Conversations",
+      content: { "application/json": { schema: z.array(conversationSchema) } },
+    },
+    401: {
+      description: "Missing or invalid access token",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    403: {
+      description: "Player lacks catCare.access",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    404: {
+      description: "Cat not found or caller is not a member",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+  },
+});
+
+catCareRoutes.openapi(listConversationsRoute, async (c) => {
+  const auth = await authenticatePlayer(c);
+  if (!auth.ok) return c.json({ error: auth.error }, auth.status);
+
+  const { catId } = c.req.valid("param");
+  if (!(await service.isCatMember(catId, auth.playerId))) {
+    return c.json({ error: "not_found" }, 404);
+  }
+
+  const conversations = await service.listConversations(catId);
+  return c.json(conversations, 200);
+});
+
+const sendMessageRoute = createRoute({
+  method: "post",
+  path: "/cats/{catId}/conversations/{id}/messages",
+  tags: ["cat-care"],
+  summary:
+    "Send a message in a conversation; synchronously streams eve's reply back chunk by chunk (票 15 定案), " +
+    "then persists the full assistant reply once the stream ends",
+  request: {
+    params: catRecordParamSchema,
+    body: { content: { "application/json": { schema: createMessageBodySchema } } },
+  },
+  responses: {
+    // 200 故意不宣告 content(比照既有 204 路由的做法):實際回應是原樣轉發 eve 的 ReadableStream
+    // (c.body()),不是可以套 zod schema 驗證的單一 JSON/text 值,zod-openapi 也沒有描述
+    // streaming body 的 schema 型別可用。少一個 response 帶 content 會讓 zod-openapi 的
+    // RouteHandler 型別退回允許 handler 直接回傳原生 Response(見 node_modules 型別定義),
+    // 這裡就是靠這個逃生口讓 c.body(stream, ...) 通過型別檢查。
+    200: {
+      description: "Streamed assistant reply (text/plain, chunked)",
+    },
+    401: {
+      description: "Missing or invalid access token",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    403: {
+      description: "Player lacks catCare.access",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    404: {
+      description: "Cat not found, caller is not a member, or conversation does not belong to this cat",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    502: {
+      description: "eve did not accept the chat request",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+  },
+});
+
+catCareRoutes.openapi(sendMessageRoute, async (c) => {
+  const auth = await authenticatePlayer(c);
+  if (!auth.ok) return c.json({ error: auth.error }, auth.status);
+
+  const { catId, id } = c.req.valid("param");
+  if (!(await service.isCatMember(catId, auth.playerId))) {
+    return c.json({ error: "not_found" }, 404);
+  }
+
+  const { content } = c.req.valid("json");
+  const result = await service.sendMessage(catId, id, content);
+  if (result.kind === "not_found") return c.json({ error: "not_found" }, 404);
+  if (result.kind === "eve_unreachable") return c.json({ error: "eve_unreachable" }, 502);
+
+  return c.body(result.stream, 200, { "content-type": "text/plain; charset=utf-8" });
 });
 
 const bloodworkRecognitionCallbackRoute = createRoute({

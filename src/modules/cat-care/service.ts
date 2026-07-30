@@ -1,5 +1,6 @@
 import { canPlayer, getPlayerByEmail, getPlayerProfile, listPlayersWithAccess } from "../auth/index.js";
-import { requestBloodworkRecognition, requestHealthAdvice } from "../eve/index.js";
+import { requestBloodworkRecognition, requestChatReply, requestHealthAdvice } from "../eve/index.js";
+import type { ChatCatCareData } from "../eve/index.js";
 import { env } from "../../shared/env.js";
 import * as repo from "./repository.js";
 import { consumeBloodworkJob, createBloodworkJob } from "./bloodwork-jobs.js";
@@ -586,4 +587,81 @@ export async function getCatCarePlayer(playerId: string) {
   if (cats.length === 0 && !hasAccess) return undefined;
 
   return { playerId, cats };
+}
+
+// POST /cats/{catId}/conversations(票 24):新建一條對話串(票 15 定案:一隻貓可有多條)。
+export async function createConversation(catId: string, playerId: string) {
+  return repo.createConversation({ catId, createdBy: playerId });
+}
+
+export async function listConversations(catId: string) {
+  return repo.listConversationsForCat(catId);
+}
+
+// 票 24:把一隻貓的全部 cat-care 資料(不限驗血)蒐集成 eve 聊天 context 需要的形狀
+// (票 15 定案:每輪全部塞入,不做篩選/摘要)。範圍不套用 ?from=&to=,固定撈全部歷史。
+async function gatherCatCareData(catId: string): Promise<ChatCatCareData> {
+  const [cat, bowelMovementRows, weightRecordRows, fluidInjectionRows, bloodworkRecordRows] = await Promise.all([
+    repo.findCatById(catId),
+    repo.listBowelMovements(catId),
+    repo.listWeightRecords(catId),
+    repo.listFluidInjections(catId),
+    repo.listBloodworkRecords(catId),
+  ]);
+
+  return {
+    cat: { name: cat?.name ?? "", birthdate: cat?.birthdate ?? null, notes: cat?.notes ?? null },
+    bowelMovements: bowelMovementRows.map(({ id, catId, recordedBy, ...rest }) => rest),
+    weightRecords: weightRecordRows.map(({ id, catId, measuredBy, ...rest }) => rest),
+    fluidInjections: fluidInjectionRows.map(({ id, catId, injectedBy, ...rest }) => rest),
+    bloodworkRecords: bloodworkRecordRows.map(({ id, catId, recordedBy, ...rest }) => rest),
+  };
+}
+
+export type SendMessageResult =
+  | { kind: "ok"; stream: ReadableStream<Uint8Array> }
+  | { kind: "not_found" }
+  | { kind: "eve_unreachable" };
+
+// POST /cats/{catId}/conversations/{id}/messages(票 24):同步呼叫 eve,把 eve 的串流回應
+// 原樣轉發給呼叫端(票 15 定案:三段都轉發串流,不等完整回應)。用 TransformStream 邊轉發邊
+// 蒐集完整文字,串流結束後(flush)才把 assistant 訊息整段寫入 messages——parker-api 是
+// 常駐 Node process(非 serverless),不需要 waitUntil 之類的機制延長生命週期。
+export async function sendMessage(
+  catId: string,
+  conversationId: string,
+  content: string,
+): Promise<SendMessageResult> {
+  const conversation = await repo.findConversationById(conversationId);
+  if (!conversation || conversation.catId !== catId) return { kind: "not_found" };
+
+  await repo.createMessage({ conversationId, role: "user", content });
+
+  const [catCareData, history] = await Promise.all([
+    gatherCatCareData(catId),
+    repo.listMessagesForConversation(conversationId),
+  ]);
+
+  const result = await requestChatReply({
+    catCareData,
+    messages: history.map((message) => ({ role: message.role, content: message.content })),
+  });
+  if (result.kind === "eve_unreachable") return { kind: "eve_unreachable" };
+
+  const decoder = new TextDecoder();
+  let assistantContent = "";
+  const capture = new TransformStream<Uint8Array, Uint8Array>({
+    transform(chunk, controller) {
+      assistantContent += decoder.decode(chunk, { stream: true });
+      controller.enqueue(chunk);
+    },
+    async flush() {
+      assistantContent += decoder.decode();
+      if (assistantContent.length > 0) {
+        await repo.createMessage({ conversationId, role: "assistant", content: assistantContent });
+      }
+    },
+  });
+
+  return { kind: "ok", stream: result.response.body!.pipeThrough(capture) };
 }

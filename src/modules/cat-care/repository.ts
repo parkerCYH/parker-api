@@ -1,13 +1,15 @@
-import { and, desc, eq, gte, inArray, isNull, lte } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNull, lte } from "drizzle-orm";
 import { db } from "../../shared/db.js";
 import {
   bloodworkRecords,
   bowelMovements,
   catPlayers,
   cats,
+  conversations,
   fluidInjections,
   healthAdvice,
   healthAdviceBloodworkRecords,
+  messages,
   weightRecords,
 } from "./schema.js";
 import type {
@@ -16,6 +18,7 @@ import type {
   FluidSite,
   FluidType,
   HealthAdviceContent,
+  MessageRole,
   Method,
   StoolType,
 } from "./schema.js";
@@ -418,4 +421,34 @@ export async function listAllCats() {
       createdAt: cats.createdAt,
     })
     .from(cats);
+}
+
+// 票 24:新建一條對話串,一隻貓可有多條(票 15 定案)。
+export async function createConversation(input: { catId: string; createdBy: string }) {
+  const [row] = await db.insert(conversations).values(input).returning();
+  return row;
+}
+
+// 列出一隻貓底下的對話串,新到舊排序,供前端列表使用(票 15 定案的對話串列表)。
+export async function listConversationsForCat(catId: string) {
+  return db.select().from(conversations).where(eq(conversations.catId, catId)).orderBy(desc(conversations.createdAt));
+}
+
+export async function findConversationById(id: string) {
+  const [row] = await db.select().from(conversations).where(eq(conversations.id, id)).limit(1);
+  return row;
+}
+
+export async function createMessage(input: { conversationId: string; role: MessageRole; content: string }) {
+  const [row] = await db.insert(messages).values(input).returning();
+  return row;
+}
+
+// 送給 eve 當多輪對話的歷史 context(票 24),依時間正序(舊到新),跟前端呈現順序一致。
+export async function listMessagesForConversation(conversationId: string) {
+  return db
+    .select()
+    .from(messages)
+    .where(eq(messages.conversationId, conversationId))
+    .orderBy(asc(messages.createdAt));
 }
