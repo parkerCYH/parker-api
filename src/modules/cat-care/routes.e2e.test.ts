@@ -1285,4 +1285,158 @@ describe("cat-care routes", () => {
     );
     expect(secondDeleteRes.status).toBe(404);
   });
+
+  it("records and lists bloodwork reports for a cat, always confirmed, with date-range filtering (ticket #18)", async () => {
+    const createRes = await app.request("/api/v1/cat-care/cats", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${authorizedToken}`,
+      },
+      body: JSON.stringify({ name: "Bloodwork Test Cat" }),
+    });
+    const cat = (await createRes.json()) as CatResponse;
+
+    const oldDate = "2020-01-01T00:00:00.000Z";
+    const recentDate = "2026-06-01T15:30:00.000Z";
+
+    await app.request(`/api/v1/cat-care/cats/${cat.id}/bloodwork-records`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${authorizedToken}`,
+      },
+      body: JSON.stringify({ recordedAt: oldDate, glu: 90 }),
+    });
+
+    // 兩張真實報告驗的項目數量不同(票 04):只填一部分欄位也要能成功建立。
+    const recentRes = await app.request(`/api/v1/cat-care/cats/${cat.id}/bloodwork-records`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${authorizedToken}`,
+      },
+      body: JSON.stringify({ recordedAt: recentDate, glu: 105.5, bunCrea: 12.3, wbc: 8.1 }),
+    });
+    expect(recentRes.status).toBe(201);
+    const recentRecord = (await recentRes.json()) as {
+      status: string;
+      glu: number;
+      bunCrea: number;
+      wbc: number;
+      crea: number | null;
+    };
+    expect(recentRecord.status).toBe("confirmed");
+    expect(recentRecord.glu).toBe(105.5);
+    expect(recentRecord.bunCrea).toBe(12.3);
+    expect(recentRecord.wbc).toBe(8.1);
+    expect(recentRecord.crea ?? null).toBeNull();
+
+    const listRes = await app.request(
+      `/api/v1/cat-care/cats/${cat.id}/bloodwork-records?from=2025-01-01&to=2026-06-01`,
+      { headers: { authorization: `Bearer ${authorizedToken}` } },
+    );
+    expect(listRes.status).toBe(200);
+    const records = (await listRes.json()) as Array<{ glu: number }>;
+    expect(records.some((r) => r.glu === 105.5)).toBe(true);
+    expect(records.some((r) => r.glu === 90)).toBe(false);
+  });
+
+  it("rejects non-numeric bloodwork values (ticket #18)", async () => {
+    const createRes = await app.request("/api/v1/cat-care/cats", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${authorizedToken}`,
+      },
+      body: JSON.stringify({ name: "Bloodwork Validation Cat" }),
+    });
+    const cat = (await createRes.json()) as CatResponse;
+
+    const badRes = await app.request(`/api/v1/cat-care/cats/${cat.id}/bloodwork-records`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${authorizedToken}`,
+      },
+      body: JSON.stringify({ glu: "not-a-number" }),
+    });
+    expect(badRes.status).toBe(400);
+  });
+
+  it("lets only the recording Player edit (incl. clearing a value with null) or hard-delete a bloodwork record (ticket #18)", async () => {
+    const createRes = await app.request("/api/v1/cat-care/cats", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${authorizedToken}`,
+      },
+      body: JSON.stringify({ name: "Bloodwork Edit/Delete Cat" }),
+    });
+    const cat = (await createRes.json()) as CatResponse;
+
+    const recordRes = await app.request(`/api/v1/cat-care/cats/${cat.id}/bloodwork-records`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${authorizedToken}`,
+      },
+      body: JSON.stringify({ glu: 90, crea: 1.2 }),
+    });
+    const record = (await recordRes.json()) as { id: string };
+
+    const otherMember = await newCatCarePlayer("bloodwork-edit-delete-other");
+    await app.request(`/api/v1/cat-care/cats/${cat.id}/players`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${authorizedToken}`,
+      },
+      body: JSON.stringify({ email: otherMember.profile.email }),
+    });
+
+    const forbiddenEditRes = await app.request(
+      `/api/v1/cat-care/cats/${cat.id}/bloodwork-records/${record.id}`,
+      {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${otherMember.accessToken}`,
+        },
+        body: JSON.stringify({ glu: 999 }),
+      },
+    );
+    expect(forbiddenEditRes.status).toBe(403);
+
+    const editRes = await app.request(`/api/v1/cat-care/cats/${cat.id}/bloodwork-records/${record.id}`, {
+      method: "PATCH",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${authorizedToken}`,
+      },
+      body: JSON.stringify({ glu: 100, crea: null }),
+    });
+    expect(editRes.status).toBe(200);
+    const updated = (await editRes.json()) as { glu: number; crea: number | null };
+    expect(updated.glu).toBe(100);
+    expect(updated.crea ?? null).toBeNull();
+
+    const forbiddenDeleteRes = await app.request(
+      `/api/v1/cat-care/cats/${cat.id}/bloodwork-records/${record.id}`,
+      { method: "DELETE", headers: { authorization: `Bearer ${otherMember.accessToken}` } },
+    );
+    expect(forbiddenDeleteRes.status).toBe(403);
+
+    const deleteRes = await app.request(
+      `/api/v1/cat-care/cats/${cat.id}/bloodwork-records/${record.id}`,
+      { method: "DELETE", headers: { authorization: `Bearer ${authorizedToken}` } },
+    );
+    expect(deleteRes.status).toBe(204);
+
+    const secondDeleteRes = await app.request(
+      `/api/v1/cat-care/cats/${cat.id}/bloodwork-records/${record.id}`,
+      { method: "DELETE", headers: { authorization: `Bearer ${authorizedToken}` } },
+    );
+    expect(secondDeleteRes.status).toBe(404);
+  });
 });

@@ -1,6 +1,6 @@
 import { canPlayer, getPlayerByEmail, getPlayerProfile, listPlayersWithAccess } from "../auth/index.js";
 import * as repo from "./repository.js";
-import type { FluidSite, FluidType, Method, StoolType } from "./schema.js";
+import type { BloodworkValues, FluidSite, FluidType, Method, StoolType } from "./schema.js";
 
 // `?to=` 是日期(YYYY-MM-DD),`new Date(dateOnly)` 會解析成當天 UTC 00:00,而不是當天結束——
 // 直接拿去跟 timestamptz 欄位做 lte 比較會把當天 00:00 之後的紀錄全部濾掉。統一補上
@@ -361,6 +361,87 @@ export async function deleteFluidInjection(
   if (record.injectedBy !== playerId) return { kind: "forbidden" };
 
   await repo.deleteFluidInjection(recordId);
+  return { kind: "ok" };
+}
+
+// POST /cats/{catId}/bloodwork-records(票 18):手動填寫入口,不經過 draft,建立時直接是
+// confirmed(票 13 定案)。
+export async function recordBloodworkRecord(
+  catId: string,
+  playerId: string,
+  input: { recordedAt?: string } & BloodworkValues,
+) {
+  const { recordedAt, ...values } = input;
+  return repo.createBloodworkRecord({
+    catId,
+    recordedBy: playerId,
+    recordedAt: recordedAt ? new Date(recordedAt) : new Date(),
+    status: "confirmed",
+    ...values,
+  });
+}
+
+// 給票 20(AI 辨識情境後端)內部呼叫的寫入路徑,不透過公開的 POST(票 18 定案:公開 POST
+// 固定寫 confirmed,draft 只能經這條路徑產生)。目前沒有任何 route 呼叫這個函式。
+export async function createDraftBloodworkRecord(
+  catId: string,
+  playerId: string,
+  input: { recordedAt?: string } & BloodworkValues,
+) {
+  const { recordedAt, ...values } = input;
+  return repo.createBloodworkRecord({
+    catId,
+    recordedBy: playerId,
+    recordedAt: recordedAt ? new Date(recordedAt) : new Date(),
+    status: "draft",
+    ...values,
+  });
+}
+
+// 支援 ?from=&to= 日期區間篩選(比照 bowel/weight/fluid)。
+export async function listBloodworkRecords(catId: string, range?: { from?: string; to?: string }) {
+  return repo.listBloodworkRecords(catId, {
+    from: range?.from ? new Date(range.from) : undefined,
+    to: range?.to ? endOfDayUtc(range.to) : undefined,
+  });
+}
+
+export type UpdateBloodworkRecordResult = EditResult<
+  NonNullable<Awaited<ReturnType<typeof repo.updateBloodworkRecord>>>
+>;
+
+// PATCH /cats/{catId}/bloodwork-records/{id}(票 18):只有當初 recorded_by 本人能編輯,
+// 允許任意欄位子集更新(所有欄位選填);status 不在這支公開 PATCH 的可寫範圍內
+// (draft→confirmed 的轉換是票 21 的範圍,屆時再擴充)。
+export async function updateBloodworkRecord(
+  catId: string,
+  recordId: string,
+  playerId: string,
+  input: { recordedAt?: string } & BloodworkValues,
+): Promise<UpdateBloodworkRecordResult> {
+  const record = await repo.findBloodworkRecordById(recordId);
+  if (!record || record.catId !== catId) return { kind: "not_found" };
+  if (record.recordedBy !== playerId) return { kind: "forbidden" };
+
+  const { recordedAt, ...values } = input;
+  const updated = await repo.updateBloodworkRecord(recordId, {
+    ...(recordedAt !== undefined ? { recordedAt: new Date(recordedAt) } : {}),
+    ...values,
+  });
+  return { kind: "ok", record: updated };
+}
+
+// DELETE /cats/{catId}/bloodwork-records/{id}(票 18):hard delete,限 recorded_by 本人。
+export async function deleteBloodworkRecord(
+  catId: string,
+  recordId: string,
+  playerId: string,
+): Promise<DeleteResult> {
+  const record = await repo.findBloodworkRecordById(recordId);
+  if (!record || record.catId !== catId) return { kind: "not_found" };
+  if (record.recordedBy !== playerId) return { kind: "forbidden" };
+
+  await repo.deleteBloodworkRecord(recordId);
   return { kind: "ok" };
 }
 

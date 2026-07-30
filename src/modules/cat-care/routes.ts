@@ -106,6 +106,66 @@ const updateFluidInjectionBodySchema = z.object({
   notes: z.string().optional(),
 });
 
+// 34 項驗血欄位(票 04/18 定案):全部選填,只檢查型別為數字,不做值域檢查——PATCH 允許傳
+// null 明確清空既有數值。同一份 shape 同時當 create/update body 與 read/response schema 用
+// (兩邊語意本來就一樣:所有欄位皆選填),避免 34 個欄位在這支檔案裡重複列 2~3 次。
+const bloodworkValueSchema = z.number().nullable().optional();
+const bloodworkValuesSchema = z.object({
+  glu: bloodworkValueSchema,
+  crea: bloodworkValueSchema,
+  bun: bloodworkValueSchema,
+  bunCrea: bloodworkValueSchema,
+  tp: bloodworkValueSchema,
+  alb: bloodworkValueSchema,
+  glob: bloodworkValueSchema,
+  albGlob: bloodworkValueSchema,
+  alt: bloodworkValueSchema,
+  alkp: bloodworkValueSchema,
+  fpl: bloodworkValueSchema,
+  na: bloodworkValueSchema,
+  k: bloodworkValueSchema,
+  naK: bloodworkValueSchema,
+  cl: bloodworkValueSchema,
+  osmCalc: bloodworkValueSchema,
+  tt4: bloodworkValueSchema,
+  wbc: bloodworkValueSchema,
+  lym: bloodworkValueSchema,
+  mono: bloodworkValueSchema,
+  gran: bloodworkValueSchema,
+  lymPercent: bloodworkValueSchema,
+  monPercent: bloodworkValueSchema,
+  graPercent: bloodworkValueSchema,
+  hgb: bloodworkValueSchema,
+  hct: bloodworkValueSchema,
+  rbc: bloodworkValueSchema,
+  mcv: bloodworkValueSchema,
+  mch: bloodworkValueSchema,
+  mchc: bloodworkValueSchema,
+  rdwPercent: bloodworkValueSchema,
+  rdwa: bloodworkValueSchema,
+  plt: bloodworkValueSchema,
+  mpv: bloodworkValueSchema,
+});
+
+const bloodworkStatusSchema = z.enum(["draft", "confirmed"]);
+
+const bloodworkRecordSchema = z
+  .object({
+    id: z.string().uuid(),
+    catId: z.string().uuid(),
+    recordedBy: z.string().uuid(),
+    recordedAt: z.string(),
+    status: bloodworkStatusSchema,
+    createdAt: z.string(),
+  })
+  .merge(bloodworkValuesSchema);
+
+const bloodworkBodySchema = z
+  .object({
+    recordedAt: z.string().datetime().optional(),
+  })
+  .merge(bloodworkValuesSchema);
+
 const invitedPlayerSchema = z.object({
   id: z.string().uuid(),
   email: z.string().email(),
@@ -837,6 +897,158 @@ catCareRoutes.openapi(deleteFluidInjectionRoute, async (c) => {
 
   const { catId, id } = c.req.valid("param");
   const result = await service.deleteFluidInjection(catId, id, auth.playerId);
+  if (result.kind === "not_found") return c.json({ error: "not_found" }, 404);
+  if (result.kind === "forbidden") return c.json({ error: "forbidden" }, 403);
+  return c.body(null, 204);
+});
+
+const createBloodworkRecordRoute = createRoute({
+  method: "post",
+  path: "/cats/{catId}/bloodwork-records",
+  tags: ["cat-care"],
+  summary: "Manually record a bloodwork report for a cat (always created as confirmed)",
+  request: {
+    params: catIdParamSchema,
+    body: { content: { "application/json": { schema: bloodworkBodySchema } } },
+  },
+  responses: {
+    201: { description: "Recorded", content: { "application/json": { schema: bloodworkRecordSchema } } },
+    401: {
+      description: "Missing or invalid access token",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    403: {
+      description: "Player lacks catCare.access",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    404: {
+      description: "Cat not found or caller is not a member",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+  },
+});
+
+catCareRoutes.openapi(createBloodworkRecordRoute, async (c) => {
+  const auth = await authenticatePlayer(c);
+  if (!auth.ok) return c.json({ error: auth.error }, auth.status);
+
+  const { catId } = c.req.valid("param");
+  if (!(await service.isCatMember(catId, auth.playerId))) {
+    return c.json({ error: "not_found" }, 404);
+  }
+
+  const body = c.req.valid("json");
+  const record = await service.recordBloodworkRecord(catId, auth.playerId, body);
+  return c.json(record, 201);
+});
+
+const listBloodworkRecordsRoute = createRoute({
+  method: "get",
+  path: "/cats/{catId}/bloodwork-records",
+  tags: ["cat-care"],
+  summary: "List bloodwork records for a cat (optionally filtered by ?from=&to= date range)",
+  request: { params: catIdParamSchema, query: historyQuerySchema },
+  responses: {
+    200: {
+      description: "History",
+      content: { "application/json": { schema: z.array(bloodworkRecordSchema) } },
+    },
+    401: {
+      description: "Missing or invalid access token",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    403: {
+      description: "Player lacks catCare.access",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    404: {
+      description: "Cat not found or caller is not a member",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+  },
+});
+
+catCareRoutes.openapi(listBloodworkRecordsRoute, async (c) => {
+  const auth = await authenticatePlayer(c);
+  if (!auth.ok) return c.json({ error: auth.error }, auth.status);
+
+  const { catId } = c.req.valid("param");
+  if (!(await service.isCatMember(catId, auth.playerId))) {
+    return c.json({ error: "not_found" }, 404);
+  }
+
+  const { from, to } = c.req.valid("query");
+  const records = await service.listBloodworkRecords(catId, { from, to });
+  return c.json(records, 200);
+});
+
+const updateBloodworkRecordRoute = createRoute({
+  method: "patch",
+  path: "/cats/{catId}/bloodwork-records/{id}",
+  tags: ["cat-care"],
+  summary: "Edit a bloodwork record's fields (only the recording Player may edit)",
+  request: {
+    params: catRecordParamSchema,
+    body: { content: { "application/json": { schema: bloodworkBodySchema } } },
+  },
+  responses: {
+    200: { description: "Updated", content: { "application/json": { schema: bloodworkRecordSchema } } },
+    401: {
+      description: "Missing or invalid access token",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    403: {
+      description: "Player lacks catCare.access, or is not the original recorder",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    404: {
+      description: "Record not found for this cat",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+  },
+});
+
+catCareRoutes.openapi(updateBloodworkRecordRoute, async (c) => {
+  const auth = await authenticatePlayer(c);
+  if (!auth.ok) return c.json({ error: auth.error }, auth.status);
+
+  const { catId, id } = c.req.valid("param");
+  const body = c.req.valid("json");
+  const result = await service.updateBloodworkRecord(catId, id, auth.playerId, body);
+  if (result.kind === "not_found") return c.json({ error: "not_found" }, 404);
+  if (result.kind === "forbidden") return c.json({ error: "forbidden" }, 403);
+  return c.json(result.record, 200);
+});
+
+const deleteBloodworkRecordRoute = createRoute({
+  method: "delete",
+  path: "/cats/{catId}/bloodwork-records/{id}",
+  tags: ["cat-care"],
+  summary: "Hard-delete a bloodwork record (only the recording Player may delete)",
+  request: { params: catRecordParamSchema },
+  responses: {
+    204: { description: "Deleted" },
+    401: {
+      description: "Missing or invalid access token",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    403: {
+      description: "Player lacks catCare.access, or is not the original recorder",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    404: {
+      description: "Record not found for this cat",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+  },
+});
+
+catCareRoutes.openapi(deleteBloodworkRecordRoute, async (c) => {
+  const auth = await authenticatePlayer(c);
+  if (!auth.ok) return c.json({ error: auth.error }, auth.status);
+
+  const { catId, id } = c.req.valid("param");
+  const result = await service.deleteBloodworkRecord(catId, id, auth.playerId);
   if (result.kind === "not_found") return c.json({ error: "not_found" }, 404);
   if (result.kind === "forbidden") return c.json({ error: "forbidden" }, 403);
   return c.body(null, 204);

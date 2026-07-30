@@ -1,7 +1,14 @@
 import { and, desc, eq, gte, isNull, lte } from "drizzle-orm";
 import { db } from "../../shared/db.js";
-import { bowelMovements, catPlayers, cats, fluidInjections, weightRecords } from "./schema.js";
-import type { FluidSite, FluidType, Method, StoolType } from "./schema.js";
+import {
+  bloodworkRecords,
+  bowelMovements,
+  catPlayers,
+  cats,
+  fluidInjections,
+  weightRecords,
+} from "./schema.js";
+import type { BloodworkStatus, BloodworkValues, FluidSite, FluidType, Method, StoolType } from "./schema.js";
 
 export async function createCat(input: {
   name: string;
@@ -271,6 +278,49 @@ export async function updateFluidInjection(
 // DELETE /cats/{catId}/fluid-injections/{id}:hard delete,單筆紀錄打錯直接刪,限 injected_by 本人。
 export async function deleteFluidInjection(id: string): Promise<void> {
   await db.delete(fluidInjections).where(eq(fluidInjections.id, id));
+}
+
+export async function createBloodworkRecord(
+  input: {
+    catId: string;
+    recordedBy: string;
+    recordedAt: Date;
+    status: BloodworkStatus;
+  } & BloodworkValues,
+) {
+  const [row] = await db.insert(bloodworkRecords).values(input).returning();
+  return row;
+}
+
+// 支援 ?from=&to= 日期區間篩選 recorded_at(比照 bowel/weight/fluid)。
+export async function listBloodworkRecords(catId: string, range?: { from?: Date; to?: Date }) {
+  const conditions = [eq(bloodworkRecords.catId, catId)];
+  if (range?.from) conditions.push(gte(bloodworkRecords.recordedAt, range.from));
+  if (range?.to) conditions.push(lte(bloodworkRecords.recordedAt, range.to));
+
+  return db
+    .select()
+    .from(bloodworkRecords)
+    .where(and(...conditions))
+    .orderBy(desc(bloodworkRecords.recordedAt));
+}
+
+export async function findBloodworkRecordById(id: string) {
+  const [row] = await db.select().from(bloodworkRecords).where(eq(bloodworkRecords.id, id)).limit(1);
+  return row;
+}
+
+export async function updateBloodworkRecord(
+  id: string,
+  patch: { recordedAt?: Date } & BloodworkValues,
+) {
+  const [row] = await db.update(bloodworkRecords).set(patch).where(eq(bloodworkRecords.id, id)).returning();
+  return row;
+}
+
+// DELETE /cats/{catId}/bloodwork-records/{id}:hard delete,單筆紀錄打錯直接刪,限 recorded_by 本人。
+export async function deleteBloodworkRecord(id: string): Promise<void> {
+  await db.delete(bloodworkRecords).where(eq(bloodworkRecords.id, id));
 }
 
 // 給 admin module 用(ticket #20):cat_players 裡出現過的所有 Player id(不重複)。

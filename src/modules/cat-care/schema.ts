@@ -1,5 +1,15 @@
 import { randomUUID } from "node:crypto";
-import { boolean, date, integer, pgSchema, primaryKey, text, timestamp, uuid } from "drizzle-orm/pg-core";
+import {
+  boolean,
+  date,
+  doublePrecision,
+  integer,
+  pgSchema,
+  primaryKey,
+  text,
+  timestamp,
+  uuid,
+} from "drizzle-orm/pg-core";
 
 export const catCareSchema = pgSchema("cat_care");
 
@@ -9,6 +19,9 @@ export type StoolType = "normal" | "hard" | "soft" | "watery" | "bloody" | "muco
 export type Method = "catScale" | "holdAndSubtract" | "other";
 export type FluidSite = "left" | "right" | "nape" | "other";
 export type FluidType = "normalSaline" | "lactatedRingers" | "other";
+// AI 辨識結果先落地為 draft,人工於 read-only/edit 兩態表單確認或修改後才轉為 confirmed
+// (票 09 定案);手動填寫入口不經過 draft,建立時直接是 confirmed(票 13 定案)。
+export type BloodworkStatus = "draft" | "confirmed";
 
 // player_id/recorded_by/measured_by 都指回 auth.players.id(見 CONTEXT.md「共用帳號機制」的
 // 跨 schema 外鍵慣例),但這裡刻意不用 Drizzle 的 .references() 匯入 auth/schema.ts——
@@ -90,3 +103,65 @@ export const fluidInjections = catCareSchema.table("fluid_injections", {
   notes: text("notes"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+// 34 項驗血欄位(票 04 定案):生化 Catalyst One 面板 17 項 + CBC 血球面板 17 項,全部選填、
+// 只存數值,不存參考區間。欄位命名(camelCase 對應的 snake_case 欄位)是本票新定案,供票 20
+// (Gemini structured output schema)與票 22/24 沿用,保持全庫一致:
+//   BUN/CREA → bunCrea、ALB/GLOB → albGlob、Na/K → naK、fPL → fpl,
+//   LYM%/MON%/GRA%/RDW% → 對應 xxxPercent,其餘沿用原縮寫小寫。
+export const bloodworkRecords = catCareSchema.table("bloodwork_records", {
+  id: uuid("id")
+    .primaryKey()
+    .$defaultFn(() => randomUUID()),
+  catId: uuid("cat_id")
+    .notNull()
+    .references(() => cats.id, { onDelete: "cascade" }),
+  recordedBy: uuid("recorded_by").notNull(),
+  recordedAt: timestamp("recorded_at", { withTimezone: true }).notNull(),
+  // draft:票 20 的 AI 辨識路徑內部建立,confirmed:手動填寫或票 21 確認後轉入(票 09/13 定案)。
+  status: text("status").notNull().$type<BloodworkStatus>(),
+  // 生化 Catalyst One 面板(17 項)
+  glu: doublePrecision("glu"),
+  crea: doublePrecision("crea"),
+  bun: doublePrecision("bun"),
+  bunCrea: doublePrecision("bun_crea"),
+  tp: doublePrecision("tp"),
+  alb: doublePrecision("alb"),
+  glob: doublePrecision("glob"),
+  albGlob: doublePrecision("alb_glob"),
+  alt: doublePrecision("alt"),
+  alkp: doublePrecision("alkp"),
+  fpl: doublePrecision("fpl"),
+  na: doublePrecision("na"),
+  k: doublePrecision("k"),
+  naK: doublePrecision("na_k"),
+  cl: doublePrecision("cl"),
+  osmCalc: doublePrecision("osm_calc"),
+  tt4: doublePrecision("tt4"),
+  // CBC 血球分析面板(17 項)
+  wbc: doublePrecision("wbc"),
+  lym: doublePrecision("lym"),
+  mono: doublePrecision("mono"),
+  gran: doublePrecision("gran"),
+  lymPercent: doublePrecision("lym_percent"),
+  monPercent: doublePrecision("mon_percent"),
+  graPercent: doublePrecision("gra_percent"),
+  hgb: doublePrecision("hgb"),
+  hct: doublePrecision("hct"),
+  rbc: doublePrecision("rbc"),
+  mcv: doublePrecision("mcv"),
+  mch: doublePrecision("mch"),
+  mchc: doublePrecision("mchc"),
+  rdwPercent: doublePrecision("rdw_percent"),
+  rdwa: doublePrecision("rdwa"),
+  plt: doublePrecision("plt"),
+  mpv: doublePrecision("mpv"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+// 34 個數值欄位的 shape,從 table 定義推導、不手動重打一份清單(避免跟上面的欄位定義失去同步)。
+// repository.ts/service.ts 用這個型別接手動填寫與票 20 內部 draft 建立路徑共用的輸入。
+export type BloodworkValues = Omit<
+  typeof bloodworkRecords.$inferInsert,
+  "id" | "catId" | "recordedBy" | "recordedAt" | "status" | "createdAt"
+>;
