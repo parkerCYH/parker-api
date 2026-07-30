@@ -6,6 +6,7 @@ import { errorHandler } from "./shared/error-handler.js";
 import { authRoutes, listAppOrigins } from "./modules/auth/index.js";
 import { adminRoutes } from "./modules/admin/index.js";
 import { catCareRoutes } from "./modules/cat-care/index.js";
+import { eveRoutes } from "./modules/eve/index.js";
 
 const app = new OpenAPIHono();
 
@@ -43,6 +44,8 @@ app.get("/health", (c) => c.json({ status: "ok", commit: env.RENDER_GIT_COMMIT |
 app.route("/api/v1/auth", authRoutes);
 app.route("/api/v1/admin", adminRoutes);
 app.route("/api/v1/cat-care", catCareRoutes);
+// 票 17 walking skeleton：手動驗證 parker-api → eve 共享密鑰是否打通用，不含任何 Gemini/AI 邏輯。
+app.route("/api/v1/debug/eve", eveRoutes);
 
 app.doc("/openapi.json", {
   openapi: "3.0.0",

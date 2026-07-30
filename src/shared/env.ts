@@ -31,6 +31,11 @@ export const env = createEnv({
     ADMIN_DASHBOARD_URL: z.string().default(""),
     SUPER_ADMIN_EMAILS: z.string().default(""),
     RENDER_GIT_COMMIT: z.string().default(""),
+    // apps/eve 呼叫（票 07/17 定案的兩組共享密鑰）。eve 尚未接上真正的 AI 情境前留空也不影響
+    // 其他功能，維持跟 GOOGLE_CLIENT_ID 等選填變數一樣的寬鬆語意。
+    EVE_BASE_URL: z.string().default("http://localhost:3003"),
+    PARKER_TO_EVE_KEY: z.string().default(""),
+    EVE_TO_PARKER_KEY: z.string().default(""),
   },
   runtimeEnv: process.env,
   emptyStringAsUndefined: true,

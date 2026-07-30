@@ -33,6 +33,8 @@ export default defineConfig({
             redirectUrl: "http://test.other-app.local/login/callback",
           },
         }),
+      EVE_BASE_URL: process.env.EVE_BASE_URL ?? "http://127.0.0.1:38173",
+      PARKER_TO_EVE_KEY: process.env.PARKER_TO_EVE_KEY ?? "test-parker-to-eve-key",
     },
   },
 });

@@ -25,3 +25,9 @@ services:
         sync: false
       - key: AUTH_APP_DOMAINS
         sync: false
+      - key: EVE_BASE_URL
+        sync: false
+      - key: PARKER_TO_EVE_KEY
+        sync: false
+      - key: EVE_TO_PARKER_KEY
+        sync: false
