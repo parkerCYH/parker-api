@@ -1656,4 +1656,136 @@ describe("cat-care routes", () => {
       expect(confirmed.glu).toBe(95);
     });
   });
+
+  describe("health advice (票 22)", () => {
+    interface HealthAdviceCall {
+      records: Array<Record<string, number | null>>;
+      sharedKey: string | null;
+    }
+
+    // 跟票 20 的 stubEveFetch 不同:票 22 是同步呼叫(票 14 定案),直接回傳結構化建議 JSON,
+    // 不是 202 + 之後另一支 callback。
+    function stubEveHealthAdviceFetch(behavior: "accept" | "reject"): HealthAdviceCall[] {
+      const calls: HealthAdviceCall[] = [];
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+          const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+          if (!url.endsWith("/health-advice")) {
+            throw new Error(`unexpected fetch to ${url}`);
+          }
+
+          const headers = init?.headers as Record<string, string> | undefined;
+          const body = JSON.parse(String(init?.body)) as { records: Array<Record<string, number | null>> };
+          calls.push({ records: body.records, sharedKey: headers?.["x-parker-to-eve-key"] ?? null });
+
+          if (behavior === "reject") {
+            return new Response("bad gateway", { status: 502 });
+          }
+
+          return new Response(
+            JSON.stringify({
+              abnormalFindings: ["GLU 偏高"],
+              possibleCauses: ["飲食因素"],
+              recommendedActions: ["建議回診複檢"],
+            }),
+            { status: 200 },
+          );
+        }),
+      );
+      return calls;
+    }
+
+    async function createCat(name: string): Promise<CatResponse> {
+      const res = await app.request("/api/v1/cat-care/cats", {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${authorizedToken}` },
+        body: JSON.stringify({ name }),
+      });
+      return res.json() as Promise<CatResponse>;
+    }
+
+    async function createBloodworkRecord(catId: string, glu: number): Promise<{ id: string }> {
+      const res = await app.request(`/api/v1/cat-care/cats/${catId}/bloodwork-records`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${authorizedToken}` },
+        body: JSON.stringify({ glu }),
+      });
+      return res.json() as Promise<{ id: string }>;
+    }
+
+    function requestHealthAdvice(catId: string, bloodworkRecordIds: string[], token: string) {
+      return app.request(`/api/v1/cat-care/cats/${catId}/bloodwork-records/health-advice`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+        body: JSON.stringify({ bloodworkRecordIds }),
+      });
+    }
+
+    it("synchronously calls eve with the shared key and saves the returned advice", async () => {
+      const cat = await createCat("Health Advice Cat");
+      const record = await createBloodworkRecord(cat.id, 105.5);
+      const calls = stubEveHealthAdviceFetch("accept");
+
+      const res = await requestHealthAdvice(cat.id, [record.id], authorizedToken);
+      expect(res.status).toBe(200);
+
+      const body = (await res.json()) as {
+        id: string;
+        requestedBy: string;
+        advice: { abnormalFindings: string[]; possibleCauses: string[]; recommendedActions: string[] };
+        bloodworkRecordIds: string[];
+      };
+      expect(body.advice.abnormalFindings).toEqual(["GLU 偏高"]);
+      expect(body.bloodworkRecordIds).toEqual([record.id]);
+
+      expect(calls).toHaveLength(1);
+      expect(calls[0].sharedKey).toBe(env.PARKER_TO_EVE_KEY);
+      // 送給 eve 的是完整 34 欄位形狀(其餘欄位皆為 null),不是只挑有值的欄位。
+      expect(calls[0].records).toHaveLength(1);
+      expect(calls[0].records[0]).toMatchObject({ glu: 105.5, crea: null, wbc: null });
+    });
+
+    it("accepts multiple bloodworkRecordIds for trend analysis (票 14 定案)", async () => {
+      const cat = await createCat("Health Advice Multi Cat");
+      const first = await createBloodworkRecord(cat.id, 90);
+      const second = await createBloodworkRecord(cat.id, 110);
+      stubEveHealthAdviceFetch("accept");
+
+      const res = await requestHealthAdvice(cat.id, [first.id, second.id], authorizedToken);
+      expect(res.status).toBe(200);
+
+      const body = (await res.json()) as { bloodworkRecordIds: string[] };
+      expect([...body.bloodworkRecordIds].sort()).toEqual([first.id, second.id].sort());
+    });
+
+    it("404s when a bloodworkRecordId does not belong to this cat", async () => {
+      const cat = await createCat("Health Advice Cat A");
+      const otherCat = await createCat("Health Advice Cat B");
+      const otherRecord = await createBloodworkRecord(otherCat.id, 100);
+      stubEveHealthAdviceFetch("accept");
+
+      const res = await requestHealthAdvice(cat.id, [otherRecord.id], authorizedToken);
+      expect(res.status).toBe(404);
+    });
+
+    it("404s for a cat the caller is not a member of", async () => {
+      const cat = await createCat("Health Advice Not Member Cat");
+      const record = await createBloodworkRecord(cat.id, 100);
+      const otherMember = await newCatCarePlayer("health-advice-not-member");
+      stubEveHealthAdviceFetch("accept");
+
+      const res = await requestHealthAdvice(cat.id, [record.id], otherMember.accessToken);
+      expect(res.status).toBe(404);
+    });
+
+    it("returns 502 when eve does not return advice", async () => {
+      const cat = await createCat("Health Advice Reject Cat");
+      const record = await createBloodworkRecord(cat.id, 100);
+      stubEveHealthAdviceFetch("reject");
+
+      const res = await requestHealthAdvice(cat.id, [record.id], authorizedToken);
+      expect(res.status).toBe(502);
+    });
+  });
 });

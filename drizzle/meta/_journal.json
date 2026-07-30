@@ -92,6 +92,13 @@
       "when": 1785392657543,
       "tag": "0012_tearful_warbound",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1785411312631,
+      "tag": "0013_bright_supernaut",
+      "breakpoints": true
     }
   ]
 }

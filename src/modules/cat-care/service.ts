@@ -1,5 +1,5 @@
 import { canPlayer, getPlayerByEmail, getPlayerProfile, listPlayersWithAccess } from "../auth/index.js";
-import { requestBloodworkRecognition } from "../eve/index.js";
+import { requestBloodworkRecognition, requestHealthAdvice } from "../eve/index.js";
 import { env } from "../../shared/env.js";
 import * as repo from "./repository.js";
 import { consumeBloodworkJob, createBloodworkJob } from "./bloodwork-jobs.js";
@@ -494,6 +494,41 @@ export async function deleteBloodworkRecord(
 
   await repo.deleteBloodworkRecord(recordId);
   return { kind: "ok" };
+}
+
+// 從 DB 查出的驗血紀錄還原成 BloodworkValues 形狀,只留 34 項數值欄位給 eve(票 22),
+// id/catId/recordedBy/recordedAt/status/createdAt 這些不是 eve 需要的資料。
+function toBloodworkValues(record: Awaited<ReturnType<typeof repo.findBloodworkRecordsByIds>>[number]): BloodworkValues {
+  const { id, catId, recordedBy, recordedAt, status, createdAt, ...values } = record;
+  return values;
+}
+
+export type GetHealthAdviceResult =
+  | { kind: "ok"; advice: Awaited<ReturnType<typeof repo.createHealthAdvice>> & { bloodworkRecordIds: string[] } }
+  | { kind: "not_found" }
+  | { kind: "eve_unreachable" };
+
+// POST /cats/{catId}/bloodwork-records/health-advice(票 22):同步呼叫 eve 取得一或多筆
+// 已存驗血紀錄的健康建議(票 14 定案,不套用票 08 的 job id + callback),寫入 health_advice
+// + 多對多關聯表後回傳。傳入的 bloodworkRecordIds 必須全部屬於這隻貓,否則視為 404
+// (不區分「id 不存在」跟「id 屬於別隻貓」,理由同其他 record 的 not_found 處理)。
+export async function getHealthAdvice(
+  catId: string,
+  playerId: string,
+  bloodworkRecordIds: string[],
+): Promise<GetHealthAdviceResult> {
+  const records = await repo.findBloodworkRecordsByIds(catId, bloodworkRecordIds);
+  if (records.length !== bloodworkRecordIds.length) return { kind: "not_found" };
+
+  const result = await requestHealthAdvice(records.map(toBloodworkValues));
+  if (result.kind === "eve_unreachable") return { kind: "eve_unreachable" };
+
+  const row = await repo.createHealthAdvice({
+    requestedBy: playerId,
+    advice: result.advice,
+    bloodworkRecordIds,
+  });
+  return { kind: "ok", advice: { ...row, bloodworkRecordIds } };
 }
 
 // 給 admin module 當 gateway 呼叫(見 ticket #14、ADR-0005),cat-care 自己不開對外端點。

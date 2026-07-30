@@ -192,6 +192,25 @@ const bloodworkRecognitionCallbackBodySchema = z.discriminatedUnion("status", [
   z.object({ status: z.literal("failed") }),
 ]);
 
+// 票 22:健康建議,分「異常指標」「可能原因」「建議行動」三區塊(票 14 定案)。
+const healthAdviceContentSchema = z.object({
+  abnormalFindings: z.array(z.string()),
+  possibleCauses: z.array(z.string()),
+  recommendedActions: z.array(z.string()),
+});
+
+const requestHealthAdviceBodySchema = z.object({
+  bloodworkRecordIds: z.array(z.string().uuid()).min(1),
+});
+
+const healthAdviceSchema = z.object({
+  id: z.string().uuid(),
+  requestedBy: z.string().uuid(),
+  advice: healthAdviceContentSchema,
+  bloodworkRecordIds: z.array(z.string().uuid()),
+  createdAt: z.string(),
+});
+
 const invitedPlayerSchema = z.object({
   id: z.string().uuid(),
   email: z.string().email(),
@@ -1135,6 +1154,56 @@ catCareRoutes.openapi(recognizeBloodworkRoute, async (c) => {
   }
 
   return c.json({ jobId: result.jobId }, 202);
+});
+
+const requestHealthAdviceRoute = createRoute({
+  method: "post",
+  path: "/cats/{catId}/bloodwork-records/health-advice",
+  tags: ["cat-care"],
+  summary:
+    "Get AI-generated health advice for one or more bloodwork records (synchronous; caller must be a member)",
+  request: {
+    params: catIdParamSchema,
+    body: { content: { "application/json": { schema: requestHealthAdviceBodySchema } } },
+  },
+  responses: {
+    200: {
+      description: "Advice generated and saved",
+      content: { "application/json": { schema: healthAdviceSchema } },
+    },
+    401: {
+      description: "Missing or invalid access token",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    403: {
+      description: "Player lacks catCare.access",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    404: {
+      description: "Cat not found, caller is not a member, or a bloodworkRecordId does not belong to this cat",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    502: {
+      description: "eve did not return advice",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+  },
+});
+
+catCareRoutes.openapi(requestHealthAdviceRoute, async (c) => {
+  const auth = await authenticatePlayer(c);
+  if (!auth.ok) return c.json({ error: auth.error }, auth.status);
+
+  const { catId } = c.req.valid("param");
+  if (!(await service.isCatMember(catId, auth.playerId))) {
+    return c.json({ error: "not_found" }, 404);
+  }
+
+  const { bloodworkRecordIds } = c.req.valid("json");
+  const result = await service.getHealthAdvice(catId, auth.playerId, bloodworkRecordIds);
+  if (result.kind === "not_found") return c.json({ error: "not_found" }, 404);
+  if (result.kind === "eve_unreachable") return c.json({ error: "eve_unreachable" }, 502);
+  return c.json(result.advice, 200);
 });
 
 const bloodworkRecognitionCallbackRoute = createRoute({

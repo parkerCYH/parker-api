@@ -4,6 +4,7 @@ import {
   date,
   doublePrecision,
   integer,
+  jsonb,
   pgSchema,
   primaryKey,
   text,
@@ -165,3 +166,37 @@ export type BloodworkValues = Omit<
   typeof bloodworkRecords.$inferInsert,
   "id" | "catId" | "recordedBy" | "recordedAt" | "status" | "createdAt"
 >;
+
+// 健康建議的結構化內容(票 14 定案):分「異常指標」「可能原因」「建議行動」三區塊,由
+// apps/eve 呼叫 Gemini structured output 產生,parker-api 端原樣存 JSONB,不拆欄位。
+export type HealthAdviceContent = {
+  abnormalFindings: string[];
+  possibleCauses: string[];
+  recommendedActions: string[];
+};
+
+// requested_by 跟 bloodwork_records.recorded_by 一樣指回 auth.players.id,同理不用
+// .references() 匯入(見上方跨 module FK 慣例的說明),FK 手動加在 migration SQL。
+export const healthAdvice = catCareSchema.table("health_advice", {
+  id: uuid("id")
+    .primaryKey()
+    .$defaultFn(() => randomUUID()),
+  requestedBy: uuid("requested_by").notNull(),
+  advice: jsonb("advice").notNull().$type<HealthAdviceContent>(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+// health_advice ↔ bloodwork_records 多對多(票 14 定案):使用者觸發時可能選單筆或多筆做
+// 趨勢分析,兩邊都在 cat_care schema 內,直接用 .references()(比照 cat_players 的複合主鍵)。
+export const healthAdviceBloodworkRecords = catCareSchema.table(
+  "health_advice_bloodwork_records",
+  {
+    healthAdviceId: uuid("health_advice_id")
+      .notNull()
+      .references(() => healthAdvice.id, { onDelete: "cascade" }),
+    bloodworkRecordId: uuid("bloodwork_record_id")
+      .notNull()
+      .references(() => bloodworkRecords.id, { onDelete: "cascade" }),
+  },
+  (table) => [primaryKey({ columns: [table.healthAdviceId, table.bloodworkRecordId] })],
+);

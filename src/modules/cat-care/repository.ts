@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, isNull, lte } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNull, lte } from "drizzle-orm";
 import { db } from "../../shared/db.js";
 import {
   bloodworkRecords,
@@ -6,9 +6,19 @@ import {
   catPlayers,
   cats,
   fluidInjections,
+  healthAdvice,
+  healthAdviceBloodworkRecords,
   weightRecords,
 } from "./schema.js";
-import type { BloodworkStatus, BloodworkValues, FluidSite, FluidType, Method, StoolType } from "./schema.js";
+import type {
+  BloodworkStatus,
+  BloodworkValues,
+  FluidSite,
+  FluidType,
+  HealthAdviceContent,
+  Method,
+  StoolType,
+} from "./schema.js";
 
 export async function createCat(input: {
   name: string;
@@ -321,6 +331,39 @@ export async function updateBloodworkRecord(
 // DELETE /cats/{catId}/bloodwork-records/{id}:hard delete,單筆紀錄打錯直接刪,限 recorded_by 本人。
 export async function deleteBloodworkRecord(id: string): Promise<void> {
   await db.delete(bloodworkRecords).where(eq(bloodworkRecords.id, id));
+}
+
+// 票 22:健康建議情境用,批次依 id 查詢、順便確認每一筆都屬於這隻貓(呼叫端比對回傳筆數
+// 是否等於傳入的 id 數量,藉此判斷是否有 id 不存在或屬於別的貓咪)。
+export async function findBloodworkRecordsByIds(catId: string, ids: string[]) {
+  if (ids.length === 0) return [];
+  return db
+    .select()
+    .from(bloodworkRecords)
+    .where(and(eq(bloodworkRecords.catId, catId), inArray(bloodworkRecords.id, ids)));
+}
+
+// 票 22:寫入一筆健康建議 + 與所選驗血紀錄的多對多關聯,兩者要嘛一起成功要嘛一起失敗。
+export async function createHealthAdvice(input: {
+  requestedBy: string;
+  advice: HealthAdviceContent;
+  bloodworkRecordIds: string[];
+}) {
+  return db.transaction(async (tx) => {
+    const [row] = await tx
+      .insert(healthAdvice)
+      .values({ requestedBy: input.requestedBy, advice: input.advice })
+      .returning();
+
+    await tx.insert(healthAdviceBloodworkRecords).values(
+      input.bloodworkRecordIds.map((bloodworkRecordId) => ({
+        healthAdviceId: row.id,
+        bloodworkRecordId,
+      })),
+    );
+
+    return row;
+  });
 }
 
 // 給 admin module 用(ticket #20):cat_players 裡出現過的所有 Player id(不重複)。

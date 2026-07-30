@@ -1,4 +1,5 @@
 import { env } from "../../shared/env.js";
+import type { BloodworkValues, HealthAdviceContent } from "../cat-care/schema.js";
 
 export type EvePingResult = { ok: boolean; status: number };
 
@@ -36,4 +37,23 @@ export async function requestBloodworkRecognition(args: {
     body: formData,
   });
   return { ok: res.ok, status: res.status };
+}
+
+export type RequestHealthAdviceResult =
+  | { kind: "ok"; advice: HealthAdviceContent }
+  | { kind: "eve_unreachable" };
+
+// 票 22:健康建議情境,通訊模式是同步等待(票 14 定案,不套用票 08 的 job id + callback),
+// 所以跟 requestBloodworkRecognition 不同,這裡要直接解析 eve 的回應內容當作結果回傳,
+// 不是只看 2xx 就結束。
+export async function requestHealthAdvice(records: BloodworkValues[]): Promise<RequestHealthAdviceResult> {
+  const res = await fetch(new URL("/health-advice", env.EVE_BASE_URL), {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-parker-to-eve-key": env.PARKER_TO_EVE_KEY },
+    body: JSON.stringify({ records }),
+  });
+  if (!res.ok) return { kind: "eve_unreachable" };
+
+  const advice = (await res.json()) as HealthAdviceContent;
+  return { kind: "ok", advice };
 }
