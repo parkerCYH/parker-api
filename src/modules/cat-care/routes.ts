@@ -1206,6 +1206,46 @@ catCareRoutes.openapi(requestHealthAdviceRoute, async (c) => {
   return c.json(result.advice, 200);
 });
 
+const listHealthAdviceHistoryRoute = createRoute({
+  method: "get",
+  path: "/cats/{catId}/bloodwork-records/{id}/health-advice",
+  tags: ["cat-care"],
+  summary: "List previously generated health advice for a bloodwork record (票 23; avoids re-calling eve)",
+  request: { params: catRecordParamSchema },
+  responses: {
+    200: {
+      description: "History (newest first; empty array if none generated yet)",
+      content: { "application/json": { schema: z.array(healthAdviceSchema) } },
+    },
+    401: {
+      description: "Missing or invalid access token",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    403: {
+      description: "Player lacks catCare.access",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+    404: {
+      description: "Cat not found, caller is not a member, or record does not belong to this cat",
+      content: { "application/json": { schema: errorResponseSchema } },
+    },
+  },
+});
+
+catCareRoutes.openapi(listHealthAdviceHistoryRoute, async (c) => {
+  const auth = await authenticatePlayer(c);
+  if (!auth.ok) return c.json({ error: auth.error }, auth.status);
+
+  const { catId, id } = c.req.valid("param");
+  if (!(await service.isCatMember(catId, auth.playerId))) {
+    return c.json({ error: "not_found" }, 404);
+  }
+
+  const result = await service.getHealthAdviceHistory(catId, id);
+  if (result.kind === "not_found") return c.json({ error: "not_found" }, 404);
+  return c.json(result.advice, 200);
+});
+
 const bloodworkRecognitionCallbackRoute = createRoute({
   method: "post",
   path: "/eve-callback/bloodwork-recognition/{jobId}",

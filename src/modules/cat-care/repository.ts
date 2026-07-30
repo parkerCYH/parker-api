@@ -366,6 +366,38 @@ export async function createHealthAdvice(input: {
   });
 }
 
+// 票 23:單筆驗血紀錄的歷史建議查詢——先找出這筆紀錄關聯到的 health_advice id,再一次性
+// 撈出每一筆 advice 完整關聯的所有 bloodworkRecordIds(同一筆 advice 可能涵蓋多筆紀錄做趨勢
+// 分析,票 22 定案),避免對每筆 advice 各查一次關聯表造成 N+1。
+export async function listHealthAdviceForBloodworkRecord(bloodworkRecordId: string) {
+  const rows = await db
+    .select({ healthAdvice })
+    .from(healthAdviceBloodworkRecords)
+    .innerJoin(healthAdvice, eq(healthAdviceBloodworkRecords.healthAdviceId, healthAdvice.id))
+    .where(eq(healthAdviceBloodworkRecords.bloodworkRecordId, bloodworkRecordId))
+    .orderBy(desc(healthAdvice.createdAt));
+
+  if (rows.length === 0) return [];
+
+  const adviceIds = rows.map((row) => row.healthAdvice.id);
+  const links = await db
+    .select()
+    .from(healthAdviceBloodworkRecords)
+    .where(inArray(healthAdviceBloodworkRecords.healthAdviceId, adviceIds));
+
+  const recordIdsByAdviceId = new Map<string, string[]>();
+  for (const link of links) {
+    const list = recordIdsByAdviceId.get(link.healthAdviceId) ?? [];
+    list.push(link.bloodworkRecordId);
+    recordIdsByAdviceId.set(link.healthAdviceId, list);
+  }
+
+  return rows.map((row) => ({
+    ...row.healthAdvice,
+    bloodworkRecordIds: recordIdsByAdviceId.get(row.healthAdvice.id) ?? [],
+  }));
+}
+
 // 給 admin module 用(ticket #20):cat_players 裡出現過的所有 Player id(不重複)。
 export async function listDistinctCatPlayerIds(): Promise<string[]> {
   const rows = await db.selectDistinct({ playerId: catPlayers.playerId }).from(catPlayers);

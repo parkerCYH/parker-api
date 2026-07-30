@@ -531,6 +531,24 @@ export async function getHealthAdvice(
   return { kind: "ok", advice: { ...row, bloodworkRecordIds } };
 }
 
+export type GetHealthAdviceHistoryResult =
+  | { kind: "ok"; advice: Awaited<ReturnType<typeof repo.listHealthAdviceForBloodworkRecord>> }
+  | { kind: "not_found" };
+
+// GET .../bloodwork-records/{id}/health-advice(票 23):查詢單筆驗血紀錄過去已產生過的健康
+// 建議,前端拿來在紀錄頁面回頭查看,不用每次都重打 Gemini。record 不存在或不屬於這隻貓一律
+// 視為 404(理由同 deleteBloodworkRecord)。
+export async function getHealthAdviceHistory(
+  catId: string,
+  bloodworkRecordId: string,
+): Promise<GetHealthAdviceHistoryResult> {
+  const record = await repo.findBloodworkRecordById(bloodworkRecordId);
+  if (!record || record.catId !== catId) return { kind: "not_found" };
+
+  const advice = await repo.listHealthAdviceForBloodworkRecord(bloodworkRecordId);
+  return { kind: "ok", advice };
+}
+
 // 給 admin module 當 gateway 呼叫(見 ticket #14、ADR-0005),cat-care 自己不開對外端點。
 export const listAllCats = repo.listAllCats;
 

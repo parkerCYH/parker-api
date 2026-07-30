@@ -1788,4 +1788,96 @@ describe("cat-care routes", () => {
       expect(res.status).toBe(502);
     });
   });
+
+  describe("health advice history (票 23)", () => {
+    async function createCat(name: string): Promise<CatResponse> {
+      const res = await app.request("/api/v1/cat-care/cats", {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${authorizedToken}` },
+        body: JSON.stringify({ name }),
+      });
+      return res.json() as Promise<CatResponse>;
+    }
+
+    async function createBloodworkRecord(catId: string, glu: number): Promise<{ id: string }> {
+      const res = await app.request(`/api/v1/cat-care/cats/${catId}/bloodwork-records`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${authorizedToken}` },
+        body: JSON.stringify({ glu }),
+      });
+      return res.json() as Promise<{ id: string }>;
+    }
+
+    function stubEveHealthAdviceFetch() {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () =>
+          new Response(
+            JSON.stringify({
+              abnormalFindings: ["GLU 偏高"],
+              possibleCauses: ["飲食因素"],
+              recommendedActions: ["建議回診複檢"],
+            }),
+            { status: 200 },
+          ),
+        ),
+      );
+    }
+
+    function getHealthAdviceHistory(catId: string, recordId: string, token: string) {
+      return app.request(`/api/v1/cat-care/cats/${catId}/bloodwork-records/${recordId}/health-advice`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+    }
+
+    it("returns an empty array when no advice has been generated yet", async () => {
+      const cat = await createCat("Health Advice History Empty Cat");
+      const record = await createBloodworkRecord(cat.id, 100);
+
+      const res = await getHealthAdviceHistory(cat.id, record.id, authorizedToken);
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual([]);
+    });
+
+    it("returns previously generated advice for that record (newest first)", async () => {
+      const cat = await createCat("Health Advice History Cat");
+      const record = await createBloodworkRecord(cat.id, 105.5);
+      stubEveHealthAdviceFetch();
+
+      const genRes = await app.request(`/api/v1/cat-care/cats/${cat.id}/bloodwork-records/health-advice`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${authorizedToken}` },
+        body: JSON.stringify({ bloodworkRecordIds: [record.id] }),
+      });
+      expect(genRes.status).toBe(200);
+
+      const res = await getHealthAdviceHistory(cat.id, record.id, authorizedToken);
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as Array<{
+        advice: { abnormalFindings: string[] };
+        bloodworkRecordIds: string[];
+      }>;
+      expect(body).toHaveLength(1);
+      expect(body[0].advice.abnormalFindings).toEqual(["GLU 偏高"]);
+      expect(body[0].bloodworkRecordIds).toEqual([record.id]);
+    });
+
+    it("404s when the record does not belong to this cat", async () => {
+      const cat = await createCat("Health Advice History Cat A");
+      const otherCat = await createCat("Health Advice History Cat B");
+      const otherRecord = await createBloodworkRecord(otherCat.id, 100);
+
+      const res = await getHealthAdviceHistory(cat.id, otherRecord.id, authorizedToken);
+      expect(res.status).toBe(404);
+    });
+
+    it("404s for a cat the caller is not a member of", async () => {
+      const cat = await createCat("Health Advice History Not Member Cat");
+      const record = await createBloodworkRecord(cat.id, 100);
+      const otherMember = await newCatCarePlayer("health-advice-history-not-member");
+
+      const res = await getHealthAdviceHistory(cat.id, record.id, otherMember.accessToken);
+      expect(res.status).toBe(404);
+    });
+  });
 });
