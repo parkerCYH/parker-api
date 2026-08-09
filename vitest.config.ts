@@ -6,6 +6,10 @@ export default defineConfig({
     // *.scan.test.ts:ADR-0004 的例外——原始碼靜態掃描,不是 e2e,不打 Postgres。
     include: ["src/**/*.e2e.test.ts", "src/**/*.scan.test.ts"],
     passWithNoTests: true,
+    // usage-log middleware(票 04)是掛在整個 app 上的全域 side effect,每個 e2e 測試打的每個
+    // request 都會寫進同一張 usage_log.requests 表。usage-log 自己的測試需要靠「前後 count
+    // 差多少」斷言,若不同測試檔平行跑會彼此污染這個全域計數,因此關掉檔案間平行執行。
+    fileParallelism: false,
     env: {
       DATABASE_URL:
         process.env.TEST_DATABASE_URL ?? "postgres://parker:parker@localhost:5432/parker_api_test",

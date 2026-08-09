@@ -7,10 +7,14 @@ import { authRoutes, listAppOrigins } from "./modules/auth/index.js";
 import { adminRoutes } from "./modules/admin/index.js";
 import { catCareRoutes } from "./modules/cat-care/index.js";
 import { eveRoutes } from "./modules/eve/index.js";
+import { usageLogMiddleware } from "./modules/usage-log/index.js";
 
 const app = new OpenAPIHono();
 
 app.onError(errorHandler);
+
+// 使用頻率紀錄(票 04):記錄所有請求發生的時間,排除 /pin 見 middleware 內部邏輯。
+app.use("*", usageLogMiddleware);
 
 // 允許清單複用既有的網域對照機制(ticket #29),不新增獨立的 CORS env var:
 // Player app(cat-care 等)來自 AUTH_APP_DOMAINS,Admin Dashboard 來自 ADMIN_DASHBOARD_URL。
