@@ -6,6 +6,15 @@ const CAT_CARE_ORIGIN = "http://test.cat-care.local";
 const ADMIN_DASHBOARD_ORIGIN = "http://test.admin-dashboard.local";
 const UNKNOWN_ORIGIN = "http://unregistered.example.com";
 
+describe("GET /pin (票 03)", () => {
+  it("回 200 ok,且不含 /health 的 commit 欄位", async () => {
+    const res = await app.request("/pin");
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ status: "ok" });
+  });
+});
+
 describe("CORS (ticket #29)", () => {
   it("echoes Access-Control-Allow-Origin for a registered Player app origin", async () => {
     const res = await app.request("/api/v1/cat-care/cats", {

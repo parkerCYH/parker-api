@@ -41,6 +41,10 @@ app.use(
 // commit 本機沒有 RENDER_GIT_COMMIT 時回 null,不因缺這個 Render 專屬變數而噴錯(票 07)。
 app.get("/health", (c) => c.json({ status: "ok", commit: env.RENDER_GIT_COMMIT || null }));
 
+// pin 保持喚醒專用 endpoint(票 03),不共用 /health:避免 pin 自己發出的請求污染使用頻率紀錄(票 04)。
+// 不做任何業務邏輯,單純確認服務有在跑。
+app.get("/pin", (c) => c.json({ status: "ok" }));
+
 app.route("/api/v1/auth", authRoutes);
 app.route("/api/v1/admin", adminRoutes);
 app.route("/api/v1/cat-care", catCareRoutes);
