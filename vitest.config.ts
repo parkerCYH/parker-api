@@ -41,6 +41,7 @@ export default defineConfig({
       PARKER_TO_EVE_KEY: process.env.PARKER_TO_EVE_KEY ?? "test-parker-to-eve-key",
       EVE_TO_PARKER_KEY: process.env.EVE_TO_PARKER_KEY ?? "test-eve-to-parker-key",
       PARKER_API_BASE_URL: process.env.PARKER_API_BASE_URL ?? "http://test.parker-api.local",
+      VERCEL_GIT_COMMIT_SHA: process.env.VERCEL_GIT_COMMIT_SHA ?? "test-commit-sha",
     },
   },
 });

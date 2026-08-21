@@ -1,10 +1,36 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import app from "./app.js";
 
 // AUTH_APP_DOMAINS/ADMIN_DASHBOARD_URL 的測試值見 vitest.config.ts。
 const CAT_CARE_ORIGIN = "http://test.cat-care.local";
 const ADMIN_DASHBOARD_ORIGIN = "http://test.admin-dashboard.local";
 const UNKNOWN_ORIGIN = "http://unregistered.example.com";
+
+describe("GET /health (票 10)", () => {
+  it("有 VERCEL_GIT_COMMIT_SHA 時,commit 欄位回傳其值", async () => {
+    // VERCEL_GIT_COMMIT_SHA 的測試值見 vitest.config.ts,預設 "test-commit-sha"。
+    const res = await app.request("/health");
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ status: "ok", commit: "test-commit-sha" });
+  });
+
+  it("沒有 VERCEL_GIT_COMMIT_SHA 時,commit 欄位回傳 null", async () => {
+    // env 是模組載入時一次性驗證的單例(shared/env.ts),要模擬「缺這個變數」的狀態
+    // 得先 stub 成空字串(t3-env 的 emptyStringAsUndefined 會把它當未設定處理)、
+    // 重置模組快取,再動態重新載入 app,才能拿到一份用新環境變數建構出來的 app 實例。
+    vi.stubEnv("VERCEL_GIT_COMMIT_SHA", "");
+    vi.resetModules();
+    const { default: freshApp } = await import("./app.js");
+
+    const res = await freshApp.request("/health");
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ status: "ok", commit: null });
+
+    vi.unstubAllEnvs();
+  });
+});
 
 describe("GET /pin (票 03)", () => {
   it("回 200 ok,且不含 /health 的 commit 欄位", async () => {

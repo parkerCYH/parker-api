@@ -42,8 +42,8 @@ app.use(
   }),
 );
 
-// commit 本機沒有 RENDER_GIT_COMMIT 時回 null,不因缺這個 Render 專屬變數而噴錯(票 07)。
-app.get("/health", (c) => c.json({ status: "ok", commit: env.RENDER_GIT_COMMIT || null }));
+// commit 本機沒有 VERCEL_GIT_COMMIT_SHA 時回 null,不因缺這個 Vercel 專屬變數而噴錯(票 10)。
+app.get("/health", (c) => c.json({ status: "ok", commit: env.VERCEL_GIT_COMMIT_SHA || null }));
 
 // pin 保持喚醒專用 endpoint(票 03),不共用 /health:避免 pin 自己發出的請求污染使用頻率紀錄(票 04)。
 // 不做任何業務邏輯,單純確認服務有在跑。
