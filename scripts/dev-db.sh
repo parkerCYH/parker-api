@@ -8,7 +8,7 @@ cd "$(dirname "$0")/.."
 docker compose up -d postgres
 
 if command -v devrun >/dev/null 2>&1; then
-  devrun register parker-api-postgres 5432 "postgres://parker:parker@localhost:5432/parker_api"
+  devrun register parker-api-postgres 5433 "postgres://parker:parker@localhost:5433/parker_api"
 else
   echo "devrun 未安裝（見 .scratch/dev-server-port-management/），跳過 registry 登記" >&2
 fi
